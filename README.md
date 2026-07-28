@@ -92,3 +92,11 @@ Agent Ledger is designed to keep financial records local, but that does not remo
 - SQLite is suitable for a single trusted operator or modest local use; it is not a multi-tenant accounting service.
 - There is no bundled cloud deployment, Docker image, bank synchronization, or Hermes dependency.
 - This project is in an early stage; treat exports, migrations, and agent automation with care.
+
+## Acknowledgements
+
+Parts of Agent Ledger's visual design tokens were adapted from
+[apple-design-skill](https://github.com/naplesblue/apple-design-skill)
+by naplesblue, used under the MIT License.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for license details.
