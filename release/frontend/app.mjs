@@ -75,6 +75,9 @@ export const categoryPickerGroups = (taxonomy) => taxonomy?.categories || [];
 export const nextExpandedCategoryGroupIds = (currentIds, groupId) => (
   currentIds.includes(groupId) ? [] : [groupId]
 );
+export const transactionForEdit = (transactionsById, transactionId) => (
+  transactionsById.get(transactionId) || null
+);
 const OVERVIEW_ACCOUNT_GROUPS = [
   ['信用卡', ['示例信用卡C', '示例信用卡B', '示例信用卡A', '示例信用卡D', '示例信用卡E']],
   ['储蓄卡', ['日常储蓄账户', '示例电子钱包']],
@@ -105,6 +108,7 @@ let budgetImpactTimer;
 let budgetImpactRequestToken = 0;
 let taxonomyMonthRequestToken = 0;
 let mobileStatsRequestToken = 0;
+const transactionsById = new Map();
 
 export async function api(path, options = {}) {
   if (!apiKey()) throw new ApiError('configuration', '请先在设置中填写 API Key');
@@ -176,6 +180,7 @@ function rowAccount(account) {
 }
 
 function transactionRow(transaction, editable = true) {
+  transactionsById.set(transaction.id, transaction);
   const category = formatTransactionCategory(transaction);
   const details = [transaction.account_name, transaction.timestamp.slice(0, 10)].filter(Boolean);
   const categoryState = !category ? 'is-unclassified'
@@ -649,7 +654,11 @@ function setup() {
     const editAccount = event.target.closest('[data-edit-account]')?.dataset.editAccount;
     if (editAccount) safe(() => openDialog('accountDialog', state.accounts.find((item) => item.id === editAccount)));
     const editTransaction = event.target.closest('[data-edit-transaction]')?.dataset.editTransaction;
-    if (editTransaction) safe(async () => { const rows = await api('/transactions?limit=1000'); await openDialog('transactionDialog', rows.find((item) => item.id === editTransaction)); });
+    if (editTransaction) safe(async () => {
+      const transaction = transactionForEdit(transactionsById, editTransaction);
+      if (!transaction) throw new Error('未找到这条交易，请刷新页面后重试');
+      await openDialog('transactionDialog', transaction);
+    });
     const dialog = event.target.closest('[data-open]')?.dataset.open; if (dialog) safe(() => openDialog(dialog));
     const editBudget = event.target.closest('[data-edit-budget]')?.dataset.editBudget;
     if (editBudget) safe(() => {

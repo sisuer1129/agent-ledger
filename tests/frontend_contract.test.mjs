@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260728-ledger-filter-layout1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260729-edit-transaction-fast1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 270px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -101,6 +101,16 @@ test('editing a transaction exposes a confirmed delete action',()=>{
   assert.match(html,/id="deleteTransaction"/);
   assert.ok(appSource.includes("confirm("));
   assert.ok(appSource.includes("method: 'DELETE'"));
+});
+test('editing reuses the rendered transaction and handles a missing record safely',()=>{
+  const transaction={id:'tx-1',description:'示例交易',tag_ids:['family_member_a']};
+  const cached=new Map([[transaction.id,transaction]]);
+  assert.equal(app.transactionForEdit(cached,'tx-1'),transaction);
+  assert.equal(app.transactionForEdit(cached,'missing'),null);
+  assert.match(appSource,/transactionsById\.set\(transaction\.id, transaction\);/);
+  assert.match(appSource,/const transaction = transactionForEdit\(transactionsById, editTransaction\);/);
+  assert.doesNotMatch(appSource,/api\('\/transactions\?limit=1000'\); await openDialog\('transactionDialog', rows\.find/);
+  assert.doesNotMatch(appSource,/rows\.find\(/);
 });
 test('repayment mode exposes source and credit account controls',()=>{
   assert.match(html,/name="transaction_mode" type="radio" value="credit_repayment"/);
