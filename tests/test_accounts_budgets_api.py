@@ -81,6 +81,23 @@ class AccountsBudgetsApiTest(unittest.TestCase):
         self.assertEqual(deactivated.get_json()["is_active"], 0)
         self.assertEqual(self.request("GET", "/accounts").get_json(), [])
 
+    def test_legacy_account_types_remain_editable_without_rewriting_them(self):
+        with self.app.app_context():
+            conn = get_db()
+            conn.executemany(
+                "INSERT INTO accounts (id, name, type, initial_balance, current_balance, is_active) "
+                "VALUES (?, ?, ?, 0, 0, 1)",
+                (("legacy-shopping", "旧购物卡", "shopping_card"), ("legacy-wechat", "旧微信账户", "wechat")),
+            )
+            conn.commit()
+
+        shopping = self.request("PUT", "/accounts/legacy-shopping", {"notes": "保留旧类型"})
+        wechat = self.request("PUT", "/accounts/legacy-wechat", {"notes": "保留旧类型"})
+        self.assertEqual(shopping.status_code, 200, shopping.get_json())
+        self.assertEqual(wechat.status_code, 200, wechat.get_json())
+        self.assertEqual(shopping.get_json()["type"], "shopping_card")
+        self.assertEqual(wechat.get_json()["type"], "wechat")
+
     def test_account_validation_returns_stable_invalid_field_errors(self):
         cases = (
             ({"statement_day": 31}, "statement_day"),

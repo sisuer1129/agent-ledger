@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260729-edit-transaction-fast1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260729-account-type-groups1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 270px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -122,18 +122,22 @@ test('repayment mode exposes source and credit account controls',()=>{
     {id:'salary',type:'debit'}, {id:'card',type:'credit'}, {id:'wallet',type:'stored_value'},
   ], 'card').map((account)=>account.id), ['salary','wallet']);
 });
-test('overview groups accounts in the requested order',()=>{
+test('overview groups real account types with credit cards first',()=>{
   const groups=app.groupAccountsForOverview([
-    {id:'jd',name:'示例购物卡'}, {id:'cmb',name:'示例信用卡B'},
-    {id:'unknown',name:'备用现金'}, {id:'wallet',name:'示例电子钱包'},
-    {id:'zs',name:'示例信用卡C'}, {id:'moda',name:'示例储值卡'},
+    {id:'shopping-1',name:'购物卡甲',type:'shopping_card'},
+    {id:'credit-1',name:'信用账户甲',type:'credit'},
+    {id:'debit-1',name:'储蓄账户甲',type:'debit'},
+    {id:'wechat-1',name:'微信账户甲',type:'wechat'},
+    {id:'credit-2',name:'信用账户乙',type:'credit'},
+    {id:'cash-1',name:'现金账户甲',type:'cash'},
   ]);
   assert.deepEqual(groups.map((group)=>[group.title,group.accounts.map((account)=>account.name)]),[
-    ['信用卡',['示例信用卡C','示例信用卡B']],
-    ['储蓄卡',['示例电子钱包']],
-    ['消费卡',['示例购物卡','示例储值卡']],
-    ['其他账户',['备用现金']],
+    ['信用卡',['信用账户甲','信用账户乙']],
+    ['储蓄卡',['储蓄账户甲','微信账户甲']],
+    ['其他账户',['购物卡甲','现金账户甲']],
   ]);
+  assert.match(html,/<option value="wechat">微信账户<\/option>/);
+  assert.match(html,/<option value="shopping_card">购物卡<\/option>/);
 });
 test('mobile account detail flow has its own renderer and return action',()=>{
   for(const token of ['async function renderMobileAccountDetail','data-mobile-account-back','mobile-account-detail']) assert.ok(appSource.includes(token));

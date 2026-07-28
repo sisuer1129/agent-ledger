@@ -32,7 +32,11 @@ TRANSACTION_KINDS = frozenset(
 )
 CLASSIFICATION_STATUSES = frozenset({"unreviewed", "classified", "needs_review", "manual"})
 LEGACY_CLASSIFICATION_STATUS_ALIASES = {"auto_classified": "classified", "migrated": "classified"}
-ACCOUNT_TYPES = frozenset({"debit", "credit", "cash", "stored_value", "prepaid", "other"})
+ACCOUNT_TYPES = frozenset({
+    "debit", "credit", "cash", "stored_value", "prepaid", "other",
+    # Retained for existing ledgers created by earlier account-type profiles.
+    "shopping_card", "wechat",
+})
 SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807
 ACCOUNT_FIELDS = frozenset(
     {

@@ -79,17 +79,18 @@ export const transactionForEdit = (transactionsById, transactionId) => (
   transactionsById.get(transactionId) || null
 );
 const OVERVIEW_ACCOUNT_GROUPS = [
-  ['信用卡', ['示例信用卡C', '示例信用卡B', '示例信用卡A', '示例信用卡D', '示例信用卡E']],
-  ['储蓄卡', ['日常储蓄账户', '示例电子钱包']],
-  ['消费卡', ['示例购物卡', '示例储值卡']],
+  ['信用卡', new Set(['credit'])],
+  ['储蓄卡', new Set(['debit', 'wechat'])],
 ];
+export const accountTypeLabel = (type) => ({
+  credit: '信用卡', debit: '储蓄卡', wechat: '微信账户', shopping_card: '购物卡',
+}[type] || '账户');
 export const groupAccountsForOverview = (accounts) => {
-  const byName = new Map(accounts.map((account) => [account.name, account]));
-  const groups = OVERVIEW_ACCOUNT_GROUPS.map(([title, names]) => ({
-    title, accounts: names.map((name) => byName.get(name)).filter(Boolean),
+  const groups = OVERVIEW_ACCOUNT_GROUPS.map(([title, types]) => ({
+    title, accounts: accounts.filter((account) => types.has(account.type)),
   })).filter((group) => group.accounts.length);
-  const knownNames = new Set(OVERVIEW_ACCOUNT_GROUPS.flatMap(([, names]) => names));
-  const others = accounts.filter((account) => !knownNames.has(account.name));
+  const groupedTypes = new Set(OVERVIEW_ACCOUNT_GROUPS.flatMap(([, types]) => [...types]));
+  const others = accounts.filter((account) => !groupedTypes.has(account.type));
   if (others.length) groups.push({ title: '其他账户', accounts: others });
   return groups;
 };
@@ -175,7 +176,7 @@ function categoryPresentationMap() {
 
 function rowAccount(account) {
   return `<button class="account-row" data-account="${account.id}" aria-selected="${account.id === state.selectedAccountId}">
-    <span><strong>${escapeHtml(account.name)}</strong><br><span class="meta">${account.type === 'credit' ? '信用卡' : '账户'}${account.monthly_budget ? ` · 预算 ${formatMoney(account.monthly_budget)}` : ''}</span></span>
+    <span><strong>${escapeHtml(account.name)}</strong><br><span class="meta">${accountTypeLabel(account.type)}${account.monthly_budget ? ` · 预算 ${formatMoney(account.monthly_budget)}` : ''}</span></span>
     <span class="amount">${formatMoney(account.current_balance)}</span></button>`;
 }
 
