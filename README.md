@@ -2,7 +2,30 @@
 
 Agent Ledger is a self-hosted personal finance ledger designed for AI-agent-driven bookkeeping. It combines a Flask and SQLite API with a static web interface, while keeping the operator in control of the local database and API key.
 
-> **Early-stage project.** Review each transaction before relying on it. This project is not a bank, does not promise bank-grade security or perfect automatic classification, is not intended for enterprise accounting, and has not been validated through large-scale production use.
+> **Early-stage project.** Review transactions before relying on them. This is not a bank, provides no bank-grade security guarantee or perfect automatic classification guarantee, and is not intended for enterprise accounting.
+
+## Quick Start
+
+The current release was verified with Python 3.9.6. Compatibility with other Python versions has not yet been systematically tested. Node.js is needed for the frontend tests, and a shell with `curl` is needed for the API example below.
+
+From the repository root:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+export FINANCE_API_PORT=5009
+export FINANCE_DB_PATH="$PWD/runtime/agent-ledger.db"
+export FINANCE_API_KEY='replace-this-with-a-long-random-secret'
+.venv/bin/python release/app/main.py
+```
+
+Open <http://127.0.0.1:5009>, then enter the same API key in **Settings**. On first startup, the application creates its SQLite database at `runtime/agent-ledger.db`.
+
+To verify the installation, run:
+
+```bash
+PYTHON_BIN=.venv/bin/python bash release/scripts/verify-release.sh
+```
 
 ## Core features
 
@@ -31,22 +54,6 @@ It can then create transactions through `POST /transactions` using the category,
 
 Hermes may be used as a reference integration for an external agent workflow, but it is not required to run Agent Ledger. This repository contains no Hermes configuration, credentials, deployment record, or private workflow.
 
-## Local run
-
-Requirements: Python 3.9.6 was verified for this release. Other Python versions are not separately validated. Node.js (for frontend tests), and a shell with `curl` for the example above are also required.
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
-export FINANCE_API_PORT=5009
-export FINANCE_DB_PATH="$PWD/runtime/agent-ledger.db"
-export FINANCE_API_KEY='replace-this-with-a-long-random-secret'
-.venv/bin/python release/app/main.py
-```
-
-Open `http://127.0.0.1:5009`, then enter the same API key in **Settings**. The application creates its SQLite database at `runtime/agent-ledger.db` by default.
-
 ## Environment variables
 
 | Variable | Required | Meaning |
@@ -55,7 +62,7 @@ Open `http://127.0.0.1:5009`, then enter the same API key in **Settings**. The a
 | `FINANCE_DB_PATH` | Yes for explicit deployments | SQLite database path. Defaults to `runtime/agent-ledger.db` relative to the project. |
 | `FINANCE_API_PORT` | No | HTTP port; defaults to `5009`. |
 
-The committed `.env.example` is only a template. Do not commit a real `.env` file.
+The committed `.env.example` is only a template. The current application does not automatically load `.env`; export the variables in your shell or configure them through your process manager. Do not commit a real `.env` file.
 
 ## Tests and checks
 
