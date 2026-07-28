@@ -197,7 +197,7 @@ function ledgerColumnHead() {
 
 function renderAccountList() {
   document.querySelector('#accountList').innerHTML = groupAccountsForOverview(state.accounts).map((group) =>
-    `<section class="account-group"><h2>${group.title}</h2><div class="unified-list">${group.accounts.map(rowAccount).join('')}</div></section>`
+    `<section class="account-group"><h3>${group.title}</h3>${group.accounts.map(rowAccount).join('')}</section>`
   ).join('') || '<p class="meta">尚未添加账户</p>';
 }
 
