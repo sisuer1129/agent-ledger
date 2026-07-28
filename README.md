@@ -33,7 +33,7 @@ Hermes may be used as a reference integration for an external agent workflow, bu
 
 ## Local run
 
-Requirements: Python 3, Node.js (for frontend tests), and a shell with `curl` for the example above.
+Requirements: Python 3.9.6 was verified for this release. Other Python versions are not separately validated. Node.js (for frontend tests), and a shell with `curl` for the example above are also required.
 
 ```bash
 python3 -m venv .venv
@@ -68,6 +68,8 @@ This runs the full Python test suite, Node frontend tests, Python compilation ch
 ## Data and backups
 
 `runtime/` is the default local data directory and is ignored by Git. Keep it on persistent storage in any long-running deployment. Back up the SQLite database regularly to a separate, access-controlled location; test restoration before relying on a backup. Never commit, publish, or attach a database, transaction export, backup, screenshot, or runtime log to an issue.
+
+Before any upgrade, migration, schema change, or application/image replacement, back up both the SQLite database and the deployment configuration in a private, access-controlled location. Verify that the backup can be restored before proceeding, and never place `.env` or its secret values in Git.
 
 ## Privacy and security
 

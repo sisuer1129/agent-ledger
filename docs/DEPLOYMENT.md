@@ -4,7 +4,7 @@ Agent Ledger is a self-hosted application. Deploy it only where the operator con
 
 ## Fresh-environment setup
 
-Run these commands from the repository root on a host with Python 3 and Node.js installed:
+Run these commands from the repository root. Python 3.9.6 was verified for this release. Other Python versions are not separately validated. Node.js is needed for the frontend checks:
 
 ```bash
 python3 -m venv .venv
@@ -30,6 +30,8 @@ Do not use a database path inside a disposable container layer or temporary dire
 - Persist the directory containing the SQLite database.
 - Back up the database to a separate, access-controlled location on a regular schedule.
 - Test recovery on a copy before relying on a backup procedure.
+- Before any upgrade, migration, schema change, or application/image replacement, back up both the SQLite database and the deployment configuration in a private, access-controlled location.
+- Verify that the backup can be restored before proceeding, and never place `.env` or its secret values in Git.
 - Keep databases, transaction exports, backup files, runtime logs, and `.env` files out of the repository and out of public issue attachments.
 
 ## Verification after deployment
