@@ -1,10 +1,12 @@
 # Agent Ledger
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Agent Ledger is a self-hosted personal finance ledger designed for AI-agent-driven bookkeeping. It combines a Flask and SQLite API with a static web interface, while keeping the operator in control of the local database and API key.
 
 > **Early-stage project.** Review transactions before relying on them. This is not a bank, provides no bank-grade security guarantee or perfect automatic classification guarantee, and is not intended for enterprise accounting.
 
-![Agent Ledger 中文首页截图（使用虚构 Demo 数据）](docs/images/agent-ledger-dashboard-zh.png)
+![Agent Ledger dashboard showing monthly overview, budget, account details, charts, and synthetic transactions](docs/images/agent-ledger-dashboard-zh.png)
 
 Screenshot uses fully synthetic demo data.
 
@@ -40,7 +42,7 @@ PYTHON_BIN=.venv/bin/python bash release/scripts/verify-release.sh
 
 ## Web interface
 
-Open the web interface to enter or correct transactions, review suggested classifications, manage accounts and budgets, inspect summaries, and export a ledger. The browser stores the API address and API key only in its local browser storage; it does not receive a preset remote endpoint or key from this repository.
+Open the web interface to enter or correct transactions, review suggested classifications, manage accounts and budgets, inspect summaries, and export a ledger. The current web interface is primarily in Simplified Chinese. The browser stores the API address and API key only in its local browser storage; it does not receive a preset remote endpoint or key from this repository.
 
 ## AI Agent integration
 
@@ -84,7 +86,7 @@ Before any upgrade, migration, schema change, or application/image replacement, 
 
 ## Privacy and security
 
-Agent Ledger is designed to keep financial records local, but that does not remove operational risk. Protect the API key, limit network exposure, keep the database directory private, and review agent-created transactions. See [SECURITY.md](SECURITY.md) and [deployment guidance](docs/DEPLOYMENT.md).
+Agent Ledger is designed to keep financial records local, but that does not remove operational risk. Protect the API key, limit network exposure, keep the database directory private, and review agent-created transactions. See [SECURITY.md](SECURITY.md) and the [deployment guide](docs/DEPLOYMENT.md).
 
 ## Current limitations
 
