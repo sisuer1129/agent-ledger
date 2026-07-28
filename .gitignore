@@ -48,3 +48,4 @@ __pycache__/
 # Local audit reports; review artifacts are not part of the public release
 OPEN_SOURCE_RECHECK.md
 DOCUMENTATION_REVIEW.md
+PRE_PUSH_SECURITY_CHECK.md
