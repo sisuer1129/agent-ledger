@@ -1,0 +1,50 @@
+.env
+.env.*
+!.env.example
+
+# Runtime data and exports
+runtime/
+config/
+data/
+uploads/
+storage/
+backups/
+reports/
+release/backups/
+release/reports/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.db-journal
+*-wal
+*-shm
+*.csv
+*.xls
+*.xlsx
+*.numbers
+
+# Archives, local media, and office files
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+*.rtf
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+
+# Local tooling
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.pid
+.DS_Store
+
+# Local audit reports; review artifacts are not part of the public release
+OPEN_SOURCE_RECHECK.md
+DOCUMENTATION_REVIEW.md

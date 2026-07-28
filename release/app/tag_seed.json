@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "tags": [
+    {"id":"self","name":"本人","group":"家庭成员"}, {"id":"spouse","name":"配偶","group":"家庭成员"}, {"id":"family_member_a","name":"示例成员A","group":"家庭成员"}, {"id":"family_member_b","name":"示例成员B","group":"家庭成员"}, {"id":"child","name":"子女","group":"家庭成员"}, {"id":"parents","name":"父母","group":"家庭成员"}, {"id":"family","name":"家庭公共","group":"家庭成员"}, {"id":"family_internal","name":"家庭内部","group":"家庭成员"},
+    {"id":"trip_example","name":"示例旅行项目","group":"旅行项目"}, {"id":"trip_city","name":"示例城市旅行","group":"旅行项目"}, {"id":"trip_family","name":"家庭旅游","group":"旅行项目"}, {"id":"travel","name":"旅行","group":"旅行项目"},
+    {"id":"work_reimbursement","name":"工作报销","group":"工作相关"}, {"id":"project_cost","name":"项目成本","group":"工作相关"}, {"id":"client_expense","name":"客户支出","group":"工作相关"},
+    {"id":"reimbursement_pending","name":"待报销","group":"报销状态"}, {"id":"reimbursement_paid","name":"已报销","group":"报销状态"}, {"id":"reimbursable","name":"可报销","group":"报销状态"},
+    {"id":"necessary","name":"必要消费","group":"消费性质"}, {"id":"optional","name":"可选消费","group":"消费性质"}, {"id":"large_purchase","name":"大额消费","group":"消费性质"}, {"id":"fixed","name":"固定支出","group":"消费性质"}, {"id":"temporary","name":"临时支出","group":"消费性质"},
+    {"id":"asset_vehicle","name":"车辆","group":"资产相关"}, {"id":"asset_property","name":"房产","group":"资产相关"}, {"id":"asset_equipment","name":"设备","group":"资产相关"},
+    {"id":"subscription","name":"订阅","group":"既有标签"}, {"id":"receivable","name":"待收回","group":"既有标签"}, {"id":"tax_payment","name":"补缴税款","group":"既有标签"}, {"id":"stored_value_card","name":"储值卡","group":"既有标签"}, {"id":"device_installment_primary","name":"设备分期A","group":"既有标签"}, {"id":"tax_refund","name":"税费返还","group":"既有标签"}, {"id":"device_installment_secondary","name":"设备分期B","group":"既有标签"}, {"id":"device_installment_third","name":"设备分期C","group":"既有标签"}, {"id":"seasonal_event","name":"节日活动","group":"既有标签"}, {"id":"installment","name":"分期","group":"既有标签"}
+  ]
+}

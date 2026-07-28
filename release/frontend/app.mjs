@@ -1,0 +1,761 @@
+import { renderCharts } from './charts.mjs?v=20260726-category-colors1';
+
+export const state = {
+  accounts: [], taxonomy: null, budgets: [], budgetSummary: null, selectedAccountId: null,
+  taxonomyPromise: null, periodMode: 'billing_cycle', periodAnchor: null, filters: {}, activePage: 'overview',
+  taxonomyMonth: null, mobileStatsMonth: null,
+};
+
+export const formatMoney = (value) => new Intl.NumberFormat('zh-CN', {
+  style: 'currency', currency: 'CNY', minimumFractionDigits: 2,
+}).format(Number(value || 0));
+
+export const formatPeriod = (start, end) => `${compactDate(start)}—${compactDate(end)}`;
+export const buildQuery = (params) => {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') query.set(key, value);
+  });
+  return query;
+};
+export const buildExportPath = (filters, nonce = Date.now()) => {
+  const query = buildQuery(filters);
+  query.set('_fresh', String(nonce));
+  return `/export.csv?${query}`;
+};
+export const budgetState = (percent) => (percent >= 100 ? 'over' : percent >= 80 ? 'warning' : 'normal');
+export const normalizeTransactionAmount = (value, kind) => {
+  const amount = Math.abs(Number(value || 0));
+  return kind === 'expense' ? -amount : amount;
+};
+export const formatTransactionCategory = ({ category_primary_name, category_secondary_name }) => (
+  [category_primary_name, category_secondary_name].filter(Boolean).join(' · ')
+);
+export const formatBudgetAlert = (item) => (
+  item.status === 'exceeded'
+    ? `${item.name}预算超支 ${formatMoney(-item.remaining_amount)}`
+    : `${item.name}预算已用 ${(item.usage_rate * 100).toFixed(0)}%`
+);
+export const formatBudgetImpactPreview = (preview) => {
+  if (!preview?.visible) {
+    if (preview?.reason === 'unclassified') return '选择分类后显示预算影响';
+    if (preview?.reason === 'unbudgeted') return `${preview.category?.name || '该分类'}本月尚未设置预算`;
+    return '';
+  }
+  const { category, current, projected } = preview;
+  const headline = `${category.name}预算：已用 ${formatMoney(current.spent_amount)} / ${formatMoney(current.budget_amount)}`;
+  const outcome = projected.remaining_amount < 0
+    ? `记入本笔后将超出预算 ${formatMoney(-projected.remaining_amount)}`
+    : `记入后剩余 ${formatMoney(projected.remaining_amount)}`;
+  return `${headline}\n${outcome}`;
+};
+export const categoryBudgetDetails = (category) => {
+  if (category?.budget_amount === null || category?.budget_amount === undefined) return null;
+  return {
+    spend: `本月支出 ${formatMoney(category.spent_amount)}`,
+    budget: `预算 ${formatMoney(category.budget_amount)}`,
+    usage: `已用 ${(category.usage_rate * 100).toFixed(0)}%`,
+    balance: category.remaining_amount < 0 ? `超支 ${formatMoney(-category.remaining_amount)}` : `剩余 ${formatMoney(category.remaining_amount)}`,
+    status: category.status,
+  };
+};
+export const repaymentSourceAccounts = (accounts, creditAccountId) => (
+  accounts.filter((account) => account.id !== creditAccountId)
+);
+export const prepareTransactionPayload = (data) => {
+  const payload = { ...data };
+  if (!payload.category_id) delete payload.category_id;
+  return payload;
+};
+export const COMMON_CATEGORY_IDS = [
+  'expense_dining_meal', 'expense_daily_shopping_groceries', 'expense_vehicle_charging_fuel',
+  'expense_transport_temporary_parking', 'expense_digital_ai', 'expense_network_service',
+];
+export const categoryPickerGroups = (taxonomy) => taxonomy?.categories || [];
+export const nextExpandedCategoryGroupIds = (currentIds, groupId) => (
+  currentIds.includes(groupId) ? [] : [groupId]
+);
+const OVERVIEW_ACCOUNT_GROUPS = [
+  ['信用卡', ['示例信用卡C', '示例信用卡B', '示例信用卡A', '示例信用卡D', '示例信用卡E']],
+  ['储蓄卡', ['日常储蓄账户', '示例电子钱包']],
+  ['消费卡', ['示例购物卡', '示例储值卡']],
+];
+export const groupAccountsForOverview = (accounts) => {
+  const byName = new Map(accounts.map((account) => [account.name, account]));
+  const groups = OVERVIEW_ACCOUNT_GROUPS.map(([title, names]) => ({
+    title, accounts: names.map((name) => byName.get(name)).filter(Boolean),
+  })).filter((group) => group.accounts.length);
+  const knownNames = new Set(OVERVIEW_ACCOUNT_GROUPS.flatMap(([, names]) => names));
+  const others = accounts.filter((account) => !knownNames.has(account.name));
+  if (others.length) groups.push({ title: '其他账户', accounts: others });
+  return groups;
+};
+
+class ApiError extends Error {
+  constructor(type, message, detail) { super(message); this.type = type; this.detail = detail; }
+}
+
+const compactDate = (value) => value.replace(/-(\d{2})/g, '/$1').replace(/\/0/g, '/');
+const baseUrl = () => localStorage.getItem('apiUrl') || '';
+const apiKey = () => localStorage.getItem('apiKey') || '';
+const today = () => new Date().toISOString().slice(0, 10);
+let chartLibraryPromise;
+let expandedCategoryGroups = new Set();
+let budgetImpactTimer;
+let budgetImpactRequestToken = 0;
+let taxonomyMonthRequestToken = 0;
+let mobileStatsRequestToken = 0;
+
+export async function api(path, options = {}) {
+  if (!apiKey()) throw new ApiError('configuration', '请先在设置中填写 API Key');
+  let response;
+  try {
+    response = await fetch(baseUrl() + path, {
+      ...options,
+      headers: { 'X-API-Key': apiKey(), 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+  } catch (cause) {
+    throw new ApiError('network', '无法连接账本服务', cause);
+  }
+  if (response.status === 401) throw new ApiError('authentication', 'API Key 无效');
+  const isCsv = response.headers.get('content-type')?.includes('text/csv');
+  const body = isCsv ? await response.blob() : await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = body?.error;
+    throw new ApiError(response.status === 400 ? 'validation' : 'server', detail?.message || '服务暂时不可用', detail);
+  }
+  return body;
+}
+
+function escapeHtml(value) {
+  const element = document.createElement('span');
+  element.textContent = value ?? '';
+  return element.innerHTML;
+}
+
+function showStatus(message, retry) {
+  const node = document.querySelector('#status');
+  node.textContent = message;
+  if (retry) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.textContent = '重试'; button.addEventListener('click', retry);
+    node.append(' ', button);
+  }
+  node.style.display = message ? 'block' : 'none';
+}
+
+function safe(task) {
+  return Promise.resolve(task()).catch((error) => showStatus(error.message, () => safe(task)));
+}
+
+function categoryOptions() {
+  const roots = state.taxonomy?.categories || [];
+  return roots.flatMap((parent) => [parent, ...(parent.children || [])]);
+}
+
+function categoryPresentationMap() {
+  const fallbackColor = state.taxonomy?.category_fallback_color;
+  const entries = [['_fallback', {
+    label: '未分类', primaryLabel: '未分类', color: fallbackColor, rootColor: fallbackColor,
+  }]];
+  (state.taxonomy?.categories || []).forEach((parent) => {
+    entries.push([parent.id, {
+      label: parent.name, primaryLabel: parent.name, color: parent.color, rootColor: parent.root_color,
+    }]);
+    (parent.children || []).forEach((child) => entries.push([child.id, {
+      label: child.name, primaryLabel: parent.name, color: child.color, rootColor: child.root_color,
+    }]));
+  });
+  return Object.fromEntries(entries);
+}
+
+function rowAccount(account) {
+  return `<button class="account-row" data-account="${account.id}" aria-selected="${account.id === state.selectedAccountId}">
+    <span><strong>${escapeHtml(account.name)}</strong><br><span class="meta">${account.type === 'credit' ? '信用卡' : '账户'}${account.monthly_budget ? ` · 预算 ${formatMoney(account.monthly_budget)}` : ''}</span></span>
+    <span class="amount">${formatMoney(account.current_balance)}</span></button>`;
+}
+
+function transactionRow(transaction, editable = true) {
+  const category = formatTransactionCategory(transaction);
+  const details = [transaction.account_name, transaction.timestamp.slice(0, 10)].filter(Boolean);
+  const categoryState = !category ? 'is-unclassified'
+    : transaction.transaction_kind === 'expense' ? 'is-expense'
+      : transaction.transaction_kind === 'income' ? 'is-income'
+        : 'is-neutral';
+  const categoryDot = category ? '<i class="ledger-category-dot" aria-hidden="true"></i>' : '';
+  const categoryTag = `<span class="ledger-category ${categoryState}">${categoryDot}${escapeHtml(category || '未分类')}</span>`;
+  const mobileCategory = categoryTag;
+  return `<div class="ledger-row transaction-row"><span class="transaction-main"><strong>${escapeHtml(transaction.description)}</strong><br><span class="meta">${details.map(escapeHtml).join(' · ')}<span class="transaction-mobile-category">${mobileCategory}</span></span></span>
+    ${categoryTag}
+    <span class="amount ${transaction.amount < 0 ? 'negative' : ''}">${formatMoney(transaction.amount)}</span>
+    ${editable && transaction.transaction_kind !== 'credit_repayment' ? `<button data-edit-transaction="${transaction.id}" aria-label="编辑交易">编辑</button>` : '<span class="ledger-action-placeholder">—</span>'}</div>`;
+}
+
+function ledgerColumnHead() {
+  return '<div class="ledger-column-head" aria-hidden="true"><span>消费名称</span><span>类别</span><span>金额</span><span>操作</span></div>';
+}
+
+function renderAccountList() {
+  document.querySelector('#accountList').innerHTML = groupAccountsForOverview(state.accounts).map((group) =>
+    `<section class="account-group"><h2>${group.title}</h2><div class="unified-list">${group.accounts.map(rowAccount).join('')}</div></section>`
+  ).join('') || '<p class="meta">尚未添加账户</p>';
+}
+
+function populateTransactionForm(transaction = {}) {
+  const form = document.querySelector('#transactionForm');
+  form.dataset.transactionId = transaction.id || '';
+  form._budgetPreviewOriginal = transaction;
+  form.querySelector('#deleteTransaction').hidden = !transaction.id || transaction.transaction_kind === 'credit_repayment';
+  form.querySelector('[name=account_id]').innerHTML = state.accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
+  form.querySelector('[name=repayment_credit_account_id]').innerHTML = state.accounts
+    .filter((account) => account.type === 'credit')
+    .map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
+  form.querySelector('[name=category_id]').innerHTML = '<option value="">自动建议</option>' + categoryOptions().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  form.querySelector('[name=tag_ids]').innerHTML = (state.taxonomy?.tags || []).map((tag) => `<option value="${tag.id}">${escapeHtml(tag.name)}</option>`).join('');
+  form.querySelector('[name=timestamp]').value = transaction.timestamp?.slice(0, 10) || today();
+  for (const name of ['account_id', 'category_id', 'transaction_kind', 'description']) if (transaction[name]) form.querySelector(`[name=${name}]`).value = transaction[name];
+  form.querySelector('[name=amount]').value = transaction.amount === undefined ? '' : Math.abs(transaction.amount);
+  [...form.querySelector('[name=tag_ids]').options].forEach((option) => { option.selected = (transaction.tag_ids || []).includes(option.value); });
+  const mode = ['expense', 'income', 'refund'].includes(transaction.transaction_kind)
+    ? transaction.transaction_kind : 'expense';
+  form.querySelector(`[name=transaction_mode][value=${mode}]`).checked = true;
+  setTransactionFormMode(mode);
+  renderCategoryPicker();
+}
+
+function syncRepaymentAccountChoices(form) {
+  const creditId = form.elements.repayment_credit_account_id.value;
+  const source = form.elements.account_id;
+  [...source.options].forEach((option) => { option.hidden = option.value === creditId; });
+  if (source.selectedOptions[0]?.hidden) {
+    const replacement = [...source.options].find((option) => !option.hidden);
+    if (replacement) source.value = replacement.value;
+  }
+}
+
+function setTransactionFormMode(mode) {
+  const form = document.querySelector('#transactionForm');
+  const repayment = mode === 'credit_repayment';
+  form.elements.transaction_kind.value = repayment ? 'credit_repayment' : mode;
+  form.querySelectorAll('[data-transaction-field="ordinary"]').forEach((node) => { node.hidden = repayment; });
+  form.querySelector('[data-transaction-field="repayment-credit"]').hidden = !repayment;
+  form.querySelector('[data-transaction-field="repayment-note"]').hidden = !repayment;
+  form.querySelector('.transaction-account-label').textContent = repayment ? '付款账户' : '账户';
+  form.elements.description.required = !repayment;
+  form.querySelector('[data-save-label]').textContent = repayment ? '保存还款' : '保存';
+  if (repayment) syncRepaymentAccountChoices(form);
+  else [...form.elements.account_id.options].forEach((option) => { option.hidden = false; });
+}
+
+function setTransactionBudgetImpact(message = '', status = '') {
+  const node = document.querySelector('#transactionBudgetImpact');
+  node.hidden = !message;
+  node.textContent = message;
+  node.className = `transaction-budget-impact${status ? ` budget-${status}` : ''}`;
+}
+
+function budgetPreviewPayload(form) {
+  const mode = form.elements.transaction_mode.value;
+  if (!['expense', 'refund'].includes(mode)) return { kind: 'ignored' };
+  const categoryId = form.elements.category_id.value || null;
+  if (!categoryId) return { kind: 'unclassified' };
+  const rawAmount = Number(form.elements.amount.value);
+  const timestamp = form.elements.timestamp.value;
+  if (!Number.isFinite(rawAmount) || rawAmount <= 0 || !timestamp) return { kind: 'invalid' };
+  const original = form._budgetPreviewOriginal || {};
+  return {
+    kind: 'request',
+    timestamp,
+    amount: normalizeTransactionAmount(rawAmount, mode),
+    transaction_kind: mode,
+    category_id: categoryId,
+    excluded_from_stats: form.elements.excluded_from_stats?.checked ?? Boolean(original.excluded_from_stats),
+    transaction_id: form.dataset.transactionId || undefined,
+  };
+}
+
+function scheduleTransactionBudgetPreview() {
+  const form = document.querySelector('#transactionForm');
+  clearTimeout(budgetImpactTimer);
+  const requestToken = ++budgetImpactRequestToken;
+  const payload = budgetPreviewPayload(form);
+  if (payload.kind === 'unclassified') {
+    setTransactionBudgetImpact(formatBudgetImpactPreview({ visible: false, reason: 'unclassified' }));
+    return;
+  }
+  if (payload.kind !== 'request') {
+    setTransactionBudgetImpact();
+    return;
+  }
+  const { kind: _kind, ...requestPayload } = payload;
+  budgetImpactTimer = setTimeout(async () => {
+    try {
+      const preview = await api('/budget-impact-preview', { method: 'POST', body: JSON.stringify(requestPayload) });
+      if (requestToken !== budgetImpactRequestToken) return;
+      setTransactionBudgetImpact(formatBudgetImpactPreview(preview), preview.projected?.status || '');
+    } catch (_) {
+      if (requestToken !== budgetImpactRequestToken) return;
+      setTransactionBudgetImpact();
+    }
+  }, 300);
+}
+
+function categoryName(categoryId) {
+  return categoryOptions().find((category) => category.id === categoryId)?.name || '自动建议';
+}
+
+function categoryChoice(category, selectedId) {
+  return `<button type="button" class="category-choice${category.id === selectedId ? ' selected' : ''}" data-category-choice="${category.id}">${escapeHtml(category.name)}</button>`;
+}
+
+function renderCategoryPicker() {
+  const form = document.querySelector('#transactionForm');
+  const select = form.querySelector('[name=category_id]');
+  const selectedId = select.value;
+  const picker = document.querySelector('#categoryPicker');
+  const search = document.querySelector('#categoryPickerSearch');
+  const query = search.value.trim().toLocaleLowerCase();
+  document.querySelector('#categoryPickerToggle').textContent = categoryName(selectedId);
+  const common = COMMON_CATEGORY_IDS.map((id) => categoryOptions().find((category) => category.id === id)).filter(Boolean);
+  document.querySelector('#categoryQuickChoices').innerHTML = `<button type="button" class="category-choice${!selectedId ? ' selected' : ''}" data-category-choice="">自动建议</button>${common.map((category) => categoryChoice(category, selectedId)).join('')}`;
+  const groups = categoryPickerGroups(state.taxonomy);
+  if (query) {
+    const matches = categoryOptions().filter((category) => category.name.toLocaleLowerCase().includes(query));
+    document.querySelector('#categoryPickerGroups').innerHTML = `<div class="category-search-results">${matches.map((category) => categoryChoice(category, selectedId)).join('') || '<p class="meta">没有匹配的分类</p>'}</div>`;
+  } else {
+    document.querySelector('#categoryPickerGroups').innerHTML = groups.map((group) => {
+      const children = group.children || [];
+      if (!children.length) return `<div class="category-group single">${categoryChoice(group, selectedId)}</div>`;
+      const expanded = expandedCategoryGroups.has(group.id);
+      return `<section class="category-group"><button type="button" class="category-group-head" data-category-group="${group.id}" aria-expanded="${expanded}"><span>${escapeHtml(group.name)}</span><span>${expanded ? '⌄' : '›'}</span></button><div class="category-group-items"${expanded ? '' : ' hidden'}>${categoryChoice({ id: group.id, name: `全部${group.name}` }, selectedId)}${children.map((category) => categoryChoice(category, selectedId)).join('')}</div></section>`;
+    }).join('');
+  }
+  picker.hidden = document.querySelector('#categoryPickerToggle').getAttribute('aria-expanded') !== 'true';
+}
+
+function chooseCategory(categoryId) {
+  document.querySelector('#transactionForm [name=category_id]').value = categoryId;
+  document.querySelector('#categoryPickerToggle').setAttribute('aria-expanded', 'false');
+  document.querySelector('#categoryPickerSearch').value = '';
+  renderCategoryPicker();
+  scheduleTransactionBudgetPreview();
+}
+
+function refreshBudgetTargets() {
+  const form = document.querySelector('#budgetForm');
+  const type = form.scope_type.value;
+  const objectField = form.querySelector('[data-budget-object]');
+  if (type === 'total') {
+    form.scope_id.innerHTML = '<option value="total">本月总预算</option>';
+    objectField.hidden = true;
+    return;
+  }
+  objectField.hidden = false;
+  const targets = type === 'account' ? state.accounts : budgetCategoryOptions();
+  form.scope_id.innerHTML = targets.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+}
+
+function budgetCategoryOptions() {
+  return state.taxonomy?.categories || [];
+}
+
+function budgetStatusLabel(status) {
+  return ({ normal: '正常', warning: '接近预算', reached: '已达预算', exceeded: '已超支', unbudgeted: '未设置预算' })[status] || '未设置预算';
+}
+
+function budgetProgress(record, showMeta = true) {
+  if (record.budget_amount === null) return '';
+  const visual = Math.min(100, Math.max(0, record.usage_rate * 100));
+  const percentage = record.usage_rate * 100;
+  const balance = record.remaining_amount >= 0 ? `剩余 ${formatMoney(record.remaining_amount)}` : `超支 ${formatMoney(-record.remaining_amount)}`;
+  return `<div class="budget-progress"><span class="budget-progress-track"><i class="budget-progress-fill budget-${record.status}" style="width:${visual}%"></i></span>${showMeta ? `<span class="budget-progress-meta budget-${record.status}">${percentage.toFixed(0)}% · ${balance}</span>` : ''}</div>`;
+}
+
+function budgetEditButton(record) {
+  return `<button data-edit-budget="${record.scope_type}|${record.scope_id}">编辑</button>`;
+}
+
+function populateBudgetForm(budget = {}) {
+  const form = document.querySelector('#budgetForm');
+  form.reset();
+  form.scope_type.value = budget.scope_type || 'total';
+  refreshBudgetTargets();
+  form.scope_id.value = budget.scope_id || 'total';
+  form.amount.value = budget.amount ?? '';
+  form.effective_from.value = budget.effective_from?.slice(0, 7) || today().slice(0, 7);
+}
+
+function refreshRuleTargets() {
+  const form = document.querySelector('#ruleForm');
+  const type = form.rule_type.value;
+  form.querySelector('[name=category_id]').innerHTML = categoryOptions().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  form.querySelector('[name=tag_id]').innerHTML = (state.taxonomy?.tags || []).map((tag) => `<option value="${tag.id}">${escapeHtml(tag.name)}</option>`).join('');
+  form.querySelectorAll('[data-rule-target]').forEach((node) => node.classList.toggle('visible', node.dataset.ruleTarget === type));
+}
+
+function populateFilterOptions() {
+  const form = document.querySelector('#filterForm');
+  form.querySelector('[name=account_id]').innerHTML = '<option value="">全部账户</option>' + state.accounts.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  form.querySelector('[name=category_id]').innerHTML = '<option value="">全部分类</option>' + categoryOptions().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  form.querySelector('[name=tag_id]').innerHTML = '<option value="">全部标签</option>' + (state.taxonomy?.tags || []).map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+}
+
+async function ensureTaxonomy() {
+  if (state.taxonomy) return state.taxonomy;
+  if (!state.taxonomyPromise) {
+    state.taxonomyPromise = api('/taxonomy').then((taxonomy) => {
+      state.taxonomy = taxonomy;
+      populateFilterOptions();
+      return taxonomy;
+    }).finally(() => { state.taxonomyPromise = null; });
+  }
+  return state.taxonomyPromise;
+}
+
+async function loadChartLibrary() {
+  if (window.Chart) return window.Chart;
+  if (!chartLibraryPromise) {
+    chartLibraryPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+      script.async = true;
+      script.onload = () => resolve(window.Chart);
+      script.onerror = () => reject(new Error('图表组件暂时无法加载'));
+      document.head.append(script);
+    });
+  }
+  return chartLibraryPromise;
+}
+
+async function refreshOverview() {
+  const now = new Date();
+  const month = today().slice(0, 7);
+  const [overview, summary] = await Promise.all([
+    api(`/overview?year=${now.getFullYear()}&month=${now.getMonth() + 1}`),
+    api(`/budget-summary?month=${month}`),
+  ]);
+  document.querySelector('#overviewBalance').textContent = formatMoney(overview.income + overview.expense);
+  document.querySelector('#overviewIncome').textContent = formatMoney(overview.income);
+  document.querySelector('#overviewExpense').textContent = formatMoney(overview.expense);
+  document.querySelector('#mobileSummary').textContent = formatMoney(overview.net_assets);
+  const total = summary.total;
+  const alerts = summary.alerts.map((item) => `<span class="overview-budget-alert budget-${item.status}">${escapeHtml(formatBudgetAlert(item))}</span>`).join('');
+  const headline = total.budget_amount === null ? '本月尚未设置总预算' : `${formatMoney(total.spent_amount)} / ${formatMoney(total.budget_amount)}`;
+  const balance = total.budget_amount === null ? `已设置 ${summary.configured_category_count} 项分类预算` : total.remaining_amount < 0 ? `超支 ${formatMoney(-total.remaining_amount)}` : `剩余 ${formatMoney(total.remaining_amount)}`;
+  document.querySelector('#overviewBudgetCard').innerHTML = `<span class="overview-budget-content${alerts ? ' has-alerts' : ''}"><span class="overview-budget-main"><span class="eyebrow">本月预算</span><strong>${headline}</strong><small class="budget-${total.status}">${total.budget_amount === null ? balance : `${(total.usage_rate * 100).toFixed(0)}% · ${balance}`}</small>${total.budget_amount === null ? '' : budgetProgress(total, false)}</span>${alerts ? `<span class="overview-budget-alerts"><span class="overview-budget-alert-title">分类提醒</span>${alerts}</span>` : ''}</span><span class="overview-budget-link" aria-hidden="true">查看预算详情 ›</span>`;
+  return overview;
+}
+
+async function selectAccount(id, preserveMode = false) {
+  const account = state.accounts.find((item) => item.id === id);
+  if (!account) return;
+  state.selectedAccountId = id;
+  if (!preserveMode) state.periodMode = account.type === 'credit' && account.statement_day ? 'billing_cycle' : 'last_30_days';
+  renderAccountList();
+  const [detail] = await Promise.all([
+    api(`/accounts/${encodeURIComponent(id)}/insights?${buildQuery({ mode: state.periodMode, anchor: state.periodAnchor || today() })}`),
+    ensureTaxonomy(),
+  ]);
+  const budget = account.monthly_budget || 0;
+  const used = budget ? detail.expense / budget * 100 : 0;
+  const forecast = budget && detail.period_start ? detail.expense / Math.max(1, new Date().getDate()) * 30 : null;
+  const modeOptions = account.type === 'credit' && account.statement_day
+    ? '<option value="billing_cycle">账单周期</option><option value="last_30_days">近 30 天</option><option value="calendar_month">自然月</option>'
+    : '<option value="last_30_days">近 30 天</option><option value="calendar_month">自然月</option>';
+  document.querySelector('#accountDetail').innerHTML = `<div class="page-head"><h2>${escapeHtml(account.name)}</h2><div><button data-edit-account="${account.id}">编辑账户</button></div></div>
+    <div class="detail-controls"><select id="periodMode">${modeOptions}</select><input id="periodAnchor" type="date" value="${state.periodAnchor || today()}"><button id="refreshInsights">查看</button></div>
+    <p class="meta">${formatPeriod(detail.period_start, detail.period_end)}</p>
+    <div class="metrics"><strong>支出 ${formatMoney(detail.expense)}</strong>${budget ? `<span class="budget-${budgetState(used)}">预算 ${used.toFixed(0)}% · 剩余 ${formatMoney(Math.max(0, budget - detail.expense))}</span>` : ''}${forecast ? `<span>预计期末 ${formatMoney(forecast)}</span>` : ''}${detail.credit_limit !== undefined ? `<span>授信 ${formatMoney(detail.credit_limit)} · 已占用 ${formatMoney(detail.occupied_credit)} · 可用 ${formatMoney(detail.available_credit)}</span>` : ''}</div>
+    <div class="charts"><div class="chartbox"><canvas id="trendChart"></canvas><p id="trendEmpty" class="chart-empty" hidden>本期暂无支出趋势</p></div><div class="chartbox"><canvas id="categoryChart"></canvas><p id="categoryEmpty" class="chart-empty" hidden>本期暂无支出分类</p></div></div>
+    <div class="unified-list">${detail.transactions.map((item) => transactionRow(item)).join('') || '<p class="meta">本期暂无交易</p>'}</div>`;
+  document.querySelector('#periodMode').value = state.periodMode;
+  await loadChartLibrary().catch(() => null);
+  renderCharts(detail, categoryPresentationMap());
+}
+
+async function refreshBudgets() {
+  await ensureTaxonomy();
+  const month = today().slice(0, 7);
+  const [summary, budgets] = await Promise.all([
+    api(`/budget-summary?month=${month}`),
+    api(`/budgets?month=${month}`),
+  ]);
+  state.budgetSummary = summary;
+  state.budgets = budgets;
+  const total = summary.total;
+  const totalBudget = total.budget_amount === null ? '本月尚未设置总预算' : `${formatMoney(total.spent_amount)} / ${formatMoney(total.budget_amount)}`;
+  const allocation = summary.unallocated_amount === null ? '' : summary.unallocated_amount >= 0
+    ? `分类预算尚未分配 ${formatMoney(summary.unallocated_amount)}`
+    : `分类预算超出总预算 ${formatMoney(-summary.unallocated_amount)}`;
+  document.querySelector('#budgetSummary').innerHTML = `<div class="budget-total-card"><div><p class="eyebrow">本月总预算</p><strong>${totalBudget}</strong><p class="meta">${allocation}</p></div>${total.budget_amount === null ? '<button class="primary" data-open="budgetDialog">设置总预算</button>' : budgetEditButton({ scope_type: 'total', scope_id: 'total' })}</div>${budgetProgress(total)}`;
+  const activeBudgetByCategory = new Map(budgets.filter((item) => item.scope_type === 'category').map((item) => [item.scope_id, item]));
+  const categoryRows = summary.categories.map((category) => {
+    const budget = activeBudgetByCategory.get(category.id);
+    const action = budget ? budgetEditButton(budget) : `<button data-open-budget-category="${category.id}">设置预算</button>`;
+    if (category.budget_amount === null) {
+      return `<section class="budget-category-card is-unbudgeted"><div class="budget-category-card-head"><strong>${escapeHtml(category.name)}</strong>${action}</div><p class="meta">本月支出 ${formatMoney(category.spent_amount)} · 未设置预算</p></section>`;
+    }
+    return `<section class="budget-category-card"><div class="budget-category-card-head"><strong>${escapeHtml(category.name)}</strong>${action}</div><p class="meta">本月支出 ${formatMoney(category.spent_amount)} / 预算 ${formatMoney(category.budget_amount)}</p>${budgetProgress(category)}</section>`;
+  });
+  const legacyAccounts = budgets.filter((item) => item.scope_type === 'account').map((budget) => `<div class="budget-row"><span>账户（兼容旧设置） · ${escapeHtml(state.accounts.find((item) => item.id === budget.scope_id)?.name || budget.scope_id)}</span><span class="amount">${formatMoney(budget.amount)}</span>${budgetEditButton(budget)}</div>`).join('');
+  document.querySelector('#budgetRows').innerHTML = `<section class="budget-category-grid">${categoryRows.join('')}</section>${legacyAccounts ? `<div class="unified-list budget-legacy-accounts">${legacyAccounts}</div>` : ''}`;
+}
+
+async function refreshTaxonomy(month = today().slice(0, 7)) {
+  const requestToken = ++taxonomyMonthRequestToken;
+  await ensureTaxonomy();
+  state.taxonomyMonth = month;
+  document.querySelector('#taxonomyMonth').value = month;
+  const [rules, transactions, summary] = await Promise.all([
+    api('/classification-rules'), api('/transactions?limit=1000'), api(`/budget-summary?month=${month}`),
+  ]);
+  if (requestToken !== taxonomyMonthRequestToken) return;
+  const budgetByCategory = new Map(summary.categories.map((category) => [category.id, category]));
+  document.querySelector('#taxonomyRows').innerHTML = (state.taxonomy.categories || []).map((category) => {
+    const budget = budgetByCategory.get(category.id);
+    const details = categoryBudgetDetails(budget);
+    const budgetMarkup = details ? `<div class="taxonomy-budget"><div class="taxonomy-budget-meta budget-${details.status}"><span>${details.spend}</span><span>${details.budget}</span><span>${details.usage}</span><span>${details.balance}</span></div>${budgetProgress(budget, false)}</div>` : '';
+    return `<section class="taxonomy-category" style="--category-color:${escapeHtml(category.color || state.taxonomy.category_fallback_color)}"><span class="taxonomy-category-icon">${escapeHtml(category.icon || '•')}</span><div><strong>${escapeHtml(category.name)}</strong><p>${(category.children || []).map((item) => escapeHtml(item.name)).join('、')}</p>${budgetMarkup}</div></section>`;
+  }).join('');
+  const needsReview = transactions.filter((item) => item.classification_status === 'needs_review');
+  document.querySelector('#ruleRows').innerHTML = rules.map((rule) => `<div class="rule-row"><span>${escapeHtml(rule.pattern)}<br><span class="meta">${rule.rule_type} · 优先级 ${rule.priority}</span></span></div>`).join('') + `<div class="rule-row"><span>待整理队列<br><span class="meta">${needsReview.length} 笔待确认分类</span></span></div>`;
+}
+
+async function refreshLedger() {
+  const rows = await api(`/transactions?${buildQuery(state.filters)}`);
+  document.querySelector('#ledgerRows').innerHTML = rows.length
+    ? `${ledgerColumnHead()}${rows.map((item) => transactionRow(item)).join('')}`
+    : '<p class="meta">暂无交易</p>';
+  return rows;
+}
+
+function categoryRootIdMap() {
+  const map = new Map();
+  (state.taxonomy?.categories || []).forEach((root) => {
+    map.set(root.id, root.id);
+    (root.children || []).forEach((child) => map.set(child.id, root.id));
+  });
+  return map;
+}
+
+function mobileCategoryBudgetMarkup(category, rows) {
+  const details = categoryBudgetDetails(category);
+  const budgetMarkup = details ? `<div class="mobile-category-budget"><div><strong>${escapeHtml(category.name)}</strong><span>${details.spend} · ${details.budget}</span><span class="budget-${details.status}">${details.balance}</span></div><strong class="budget-${details.status}">${details.usage}</strong></div>${budgetProgress(category, false)}` : `<h3>${escapeHtml(category.name)}</h3>`;
+  const leafRows = rows.map((item) => `<div class="ledger-row category-stat-row"><span>${escapeHtml(item.label)}</span><span class="amount">${formatMoney(item.value)} · ${item.percentage.toFixed(0)}%</span></div>`).join('');
+  return `<section class="mobile-category-section">${budgetMarkup}${leafRows ? `<div class="unified-list">${leafRows}</div>` : ''}</section>`;
+}
+
+async function renderMobile(tab, selectedMonth) {
+  const target = document.querySelector('#mobileContent');
+  if (tab !== 'stats') mobileStatsRequestToken += 1;
+  if (tab === 'home') {
+    target.innerHTML = groupAccountsForOverview(state.accounts).map((group) =>
+      `<section class="mobile-account-group"><h2>${group.title}</h2><div class="unified-list">${group.accounts.map(rowAccount).join('')}</div></section>`
+    ).join('') || '<p class="meta">尚未添加账户</p>';
+  } else if (tab === 'ledger') {
+    const rows = await api('/transactions?limit=50'); target.innerHTML = `<div class="unified-list">${rows.map((item) => transactionRow(item)).join('') || '<p class="meta">暂无交易</p>'}</div>`;
+  } else if (tab === 'stats') {
+    const requestToken = ++mobileStatsRequestToken;
+    const month = selectedMonth || state.mobileStatsMonth || today().slice(0, 7);
+    state.mobileStatsMonth = month;
+    await ensureTaxonomy();
+    const [year, monthNumber] = month.split('-').map(Number);
+    const [overview, categories, summary] = await Promise.all([
+      api(`/overview?year=${year}&month=${monthNumber}`),
+      api(`/stats/categories?year=${year}&month=${monthNumber}`),
+      api(`/budget-summary?month=${month}`),
+    ]);
+    if (requestToken !== mobileStatsRequestToken) return;
+    const rootIds = categoryRootIdMap();
+    const rowsByRoot = new Map();
+    const ungrouped = [];
+    categories.forEach((item) => {
+      const rootId = rootIds.get(item.id);
+      if (!rootId) ungrouped.push(item);
+      else rowsByRoot.set(rootId, [...(rowsByRoot.get(rootId) || []), item]);
+    });
+    const groups = summary.categories.filter((category) => category.budget_amount !== null || category.spent_amount !== 0 || rowsByRoot.has(category.id));
+    const groupMarkup = groups.map((category) => mobileCategoryBudgetMarkup(category, rowsByRoot.get(category.id) || [])).join('');
+    const ungroupedMarkup = ungrouped.length ? `<div class="unified-list">${ungrouped.map((item) => `<div class="ledger-row category-stat-row"><span>${escapeHtml(item.label)}</span><span class="amount">${formatMoney(item.value)} · ${item.percentage.toFixed(0)}%</span></div>`).join('')}</div>` : '';
+    target.innerHTML = `<div class="page-head mobile-stats-head"><h2>统计</h2><input id="mobileStatsMonth" type="month" value="${month}"></div><p>收入 ${formatMoney(overview.income)} · 支出 ${formatMoney(overview.expense)}</p><div class="mobile-category-stats">${groupMarkup || '<p class="meta">暂无支出</p>'}${ungroupedMarkup}</div>`;
+  } else {
+    target.innerHTML = `<section class="mobile-settings"><h2>连接设置</h2><label>API 地址<input id="mobileApiUrl" value="${escapeHtml(baseUrl())}"></label><label>API Key<input id="mobileApiKey" type="password" value="${escapeHtml(apiKey())}"></label><button id="saveMobileSettings" class="primary">保存</button></section>`;
+  }
+}
+
+async function renderMobileAccountDetail(accountId) {
+  const account = state.accounts.find((item) => item.id === accountId);
+  if (!account) return renderMobile('home');
+  const mode = account.type === 'credit' && account.statement_day ? 'billing_cycle' : 'last_30_days';
+  const detail = await api(`/accounts/${encodeURIComponent(accountId)}/insights?${buildQuery({ mode, anchor: today() })}`);
+  document.querySelector('#mobileContent').innerHTML = `<section class="mobile-account-detail">
+    <button type="button" data-mobile-account-back>‹ 返回账户</button>
+    <h2>${escapeHtml(account.name)}</h2>
+    <p class="meta">${formatPeriod(detail.period_start, detail.period_end)}</p>
+    <div class="metrics"><strong>支出 ${formatMoney(detail.expense)}</strong>${detail.credit_limit !== undefined ? `<span>可用 ${formatMoney(detail.available_credit)}</span>` : ''}</div>
+    <div class="unified-list">${detail.transactions.map((item) => transactionRow(item)).join('') || '<p class="meta">本期暂无交易</p>'}</div>
+  </section>`;
+}
+
+async function openDialog(id, data = {}) {
+  if (['transactionDialog', 'budgetDialog', 'ruleDialog'].includes(id)) await ensureTaxonomy();
+  if (id === 'transactionDialog') populateTransactionForm(data);
+  if (id === 'budgetDialog') populateBudgetForm(data);
+  if (id === 'ruleDialog') refreshRuleTargets();
+  if (id === 'accountDialog') {
+    const account = data; const form = document.querySelector('#accountForm'); form.reset();
+    Object.entries(account).forEach(([field, value]) => { if (form.elements[field] && value !== null && value !== undefined) form.elements[field].value = value; });
+  }
+  document.getElementById(id).showModal();
+  if (id === 'transactionDialog') scheduleTransactionBudgetPreview();
+}
+
+async function refreshAfterSave() {
+  state.accounts = await api('/accounts'); renderAccountList();
+  populateFilterOptions();
+  await refreshOverview();
+  if (state.activePage === 'ledger') await refreshLedger();
+  if (state.activePage === 'budget') await refreshBudgets();
+  if (state.activePage === 'taxonomy') await refreshTaxonomy();
+  if (state.selectedAccountId) await selectAccount(state.selectedAccountId, true);
+  await renderMobile('home');
+}
+
+async function load() {
+  const [accounts] = await Promise.all([api('/accounts'), refreshOverview()]);
+  state.accounts = accounts;
+  renderAccountList();
+  await renderMobile('home'); showStatus('');
+}
+
+async function showDesktopPage(page) {
+  state.activePage = page;
+  document.querySelectorAll('.page').forEach((node) => node.classList.toggle('active', node.id === `${page}Page`));
+  if (page === 'ledger') { await ensureTaxonomy(); await refreshLedger(); }
+  if (page === 'budget') await refreshBudgets();
+  if (page === 'taxonomy') await refreshTaxonomy(state.taxonomyMonth || undefined);
+}
+
+function closeDialog(button) { button.closest('dialog').close(); }
+
+function setup() {
+  document.querySelector('#apiUrl').value = baseUrl(); document.querySelector('#apiKey').value = apiKey();
+  window.addEventListener('scroll', () => document.querySelector('.topnav').classList.toggle('is-scrolled', window.scrollY > 0), { passive: true });
+  document.addEventListener('click', (event) => {
+    const page = event.target.closest('[data-page]')?.dataset.page;
+    if (page) safe(() => showDesktopPage(page));
+    const accountId = event.target.closest('[data-account]')?.dataset.account;
+    if (accountId) safe(() => window.matchMedia('(max-width: 899px)').matches ? renderMobileAccountDetail(accountId) : selectAccount(accountId));
+    const editAccount = event.target.closest('[data-edit-account]')?.dataset.editAccount;
+    if (editAccount) safe(() => openDialog('accountDialog', state.accounts.find((item) => item.id === editAccount)));
+    const editTransaction = event.target.closest('[data-edit-transaction]')?.dataset.editTransaction;
+    if (editTransaction) safe(async () => { const rows = await api('/transactions?limit=1000'); await openDialog('transactionDialog', rows.find((item) => item.id === editTransaction)); });
+    const dialog = event.target.closest('[data-open]')?.dataset.open; if (dialog) safe(() => openDialog(dialog));
+    const editBudget = event.target.closest('[data-edit-budget]')?.dataset.editBudget;
+    if (editBudget) safe(() => {
+      const [scope_type, scope_id] = editBudget.split('|');
+      const existing = state.budgets.find((item) => item.scope_type === scope_type && item.scope_id === scope_id);
+      openDialog('budgetDialog', { ...existing, scope_type, scope_id, effective_from: `${today().slice(0, 7)}-01` });
+    });
+    const categoryBudget = event.target.closest('[data-open-budget-category]')?.dataset.openBudgetCategory;
+    if (categoryBudget) safe(() => openDialog('budgetDialog', { scope_type: 'category', scope_id: categoryBudget }));
+    if (event.target.closest('#categoryPickerToggle')) { const toggle = document.querySelector('#categoryPickerToggle'); toggle.setAttribute('aria-expanded', toggle.getAttribute('aria-expanded') === 'true' ? 'false' : 'true'); renderCategoryPicker(); }
+    const categoryId = event.target.closest('[data-category-choice]')?.dataset.categoryChoice; if (categoryId !== undefined) chooseCategory(categoryId);
+    const categoryGroup = event.target.closest('[data-category-group]')?.dataset.categoryGroup; if (categoryGroup) {
+      expandedCategoryGroups = new Set(nextExpandedCategoryGroupIds([...expandedCategoryGroups], categoryGroup));
+      renderCategoryPicker();
+      requestAnimationFrame(() => document.querySelector(`[data-category-group="${categoryGroup}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    }
+    if (event.target.closest('[data-close]')) closeDialog(event.target.closest('[data-close]'));
+    if (event.target.closest('[data-mobile-account-back]')) safe(() => renderMobile('home'));
+    const tab = event.target.closest('[data-mobile-tab]')?.dataset.mobileTab; if (tab) safe(() => renderMobile(tab));
+    if (event.target.id === 'refreshInsights') safe(async () => { state.periodMode = document.querySelector('#periodMode').value; state.periodAnchor = document.querySelector('#periodAnchor').value; await selectAccount(state.selectedAccountId, true); });
+    if (event.target.id === 'saveSettings') { localStorage.setItem('apiUrl', document.querySelector('#apiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#apiKey').value); safe(load); }
+    if (event.target.id === 'saveMobileSettings') { localStorage.setItem('apiUrl', document.querySelector('#mobileApiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#mobileApiKey').value); safe(load); }
+    if (event.target.id === 'deactivateAccount') safe(async () => { const id = document.querySelector('#accountForm [name=id]').value; await api(`/accounts/${id}`, { method: 'DELETE' }); document.querySelector('#accountDialog').close(); await refreshAfterSave(); });
+  });
+  document.addEventListener('input', (event) => {
+    if (event.target.id === 'categoryPickerSearch') renderCategoryPicker();
+    if (event.target.closest('#transactionForm') && ['amount', 'timestamp'].includes(event.target.name)) scheduleTransactionBudgetPreview();
+  });
+  document.querySelector('#transactionForm').addEventListener('change', (event) => {
+    if (event.target.name === 'transaction_mode') { setTransactionFormMode(event.target.value); scheduleTransactionBudgetPreview(); }
+    if (event.target.name === 'repayment_credit_account_id') syncRepaymentAccountChoices(event.currentTarget);
+    if (['timestamp', 'category_id', 'excluded_from_stats'].includes(event.target.name)) scheduleTransactionBudgetPreview();
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.id === 'taxonomyMonth') safe(() => refreshTaxonomy(event.target.value));
+    if (event.target.id === 'mobileStatsMonth') safe(() => renderMobile('stats', event.target.value));
+  });
+  document.querySelector('#budgetForm [name=scope_type]').addEventListener('change', () => safe(async () => { await ensureTaxonomy(); refreshBudgetTargets(); }));
+  document.querySelector('#ruleForm [name=rule_type]').addEventListener('change', () => safe(async () => { await ensureTaxonomy(); refreshRuleTargets(); }));
+  document.querySelector('#filterForm').addEventListener('submit', (event) => { event.preventDefault(); state.filters = Object.fromEntries(new FormData(event.currentTarget)); safe(refreshLedger); });
+  document.querySelector('#resetFilters').addEventListener('click', () => {
+    document.querySelector('#filterForm').reset();
+    state.filters = {};
+    safe(refreshLedger);
+  });
+  document.querySelector('#exportLink').addEventListener('click', (event) => safe(async () => { event.preventDefault(); const blob = await api(buildExportPath(state.filters)); const anchor = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'wallet-export.csv' }); anchor.click(); URL.revokeObjectURL(anchor.href); }));
+  document.querySelector('#transactionForm').addEventListener('submit', (event) => safe(async () => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    const mode = data.transaction_mode;
+    delete data.transaction_mode;
+    if (mode === 'credit_repayment') {
+      const repayment = {
+        source_account_id: data.account_id,
+        credit_account_id: data.repayment_credit_account_id,
+        amount: Number(data.amount),
+        timestamp: data.timestamp,
+      };
+      if (data.description.trim()) repayment.description = data.description.trim();
+      await api('/credit-card-repayments', { method: 'POST', body: JSON.stringify(repayment) });
+    } else {
+      delete data.repayment_credit_account_id;
+      data.transaction_kind = mode;
+      const payload = prepareTransactionPayload(data);
+      payload.amount = normalizeTransactionAmount(payload.amount, payload.transaction_kind);
+      payload.tag_ids = [...form.querySelector('[name=tag_ids]').selectedOptions].map((option) => option.value);
+      const id = form.dataset.transactionId;
+      await api(id ? `/transactions/${id}` : '/transactions', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    }
+    form.closest('dialog').close();
+    await refreshAfterSave();
+  }));
+  document.querySelector('#deleteTransaction').addEventListener('click', () => safe(async () => {
+    const form = document.querySelector('#transactionForm');
+    const id = form.dataset.transactionId;
+    if (!id) return;
+    const description = form.elements.description.value.trim() || '这笔交易';
+    const amount = form.elements.amount.value;
+    if (!confirm(`确定删除“${description}”（¥${amount}）吗？此操作无法撤销。`)) return;
+    await api(`/transactions/${id}`, { method: 'DELETE' });
+    form.closest('dialog').close();
+    await refreshAfterSave();
+  }));
+  document.querySelector('#accountForm').addEventListener('submit', (event) => safe(async () => { event.preventDefault(); const form = event.currentTarget; const id = form.elements.id.value; const data = Object.fromEntries(new FormData(form)); delete data.id; ['monthly_budget', 'credit_limit'].forEach((field) => { data[field] = data[field] === '' ? null : Number(data[field]); }); ['statement_day', 'due_day', 'due_month_offset'].forEach((field) => { data[field] = data[field] === '' ? null : Number(data[field]); }); await api(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) }); form.closest('dialog').close(); await refreshAfterSave(); }));
+  document.querySelector('#budgetForm').addEventListener('submit', (event) => safe(async () => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    data.amount = Number(data.amount);
+    data.effective_from += '-01';
+    await api('/budgets', { method: 'POST', body: JSON.stringify(data) });
+    form.closest('dialog').close();
+    await refreshBudgets();
+  }));
+  document.querySelector('#ruleForm').addEventListener('submit', (event) => safe(async () => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = Object.fromEntries(new FormData(form));
+    data.priority = Number(data.priority);
+    const target = data.rule_type === 'category' ? 'category_id' : data.rule_type === 'tag' ? 'tag_id' : 'transaction_kind';
+    for (const field of ['category_id', 'tag_id', 'transaction_kind']) if (field !== target) delete data[field];
+    await api('/classification-rules', { method: 'POST', body: JSON.stringify(data) });
+    form.closest('dialog').close();
+    await refreshTaxonomy();
+  }));
+}
+
+if (typeof document !== 'undefined') { setup(); if (apiKey()) safe(load); else showStatus('请在设置中填写 API Key 后开始使用'); }
