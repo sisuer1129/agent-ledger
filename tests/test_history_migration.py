@@ -49,6 +49,29 @@ class HistoryMigrationTest(unittest.TestCase):
         conn.close()
         return rows, balances
 
+    def migration_snapshot(self):
+        conn = connect_database(self.db_path)
+        try:
+            return {
+                "transactions": [tuple(row) for row in conn.execute(
+                    "SELECT id, category_id, transaction_kind, excluded_from_stats, classification_status "
+                    "FROM transactions ORDER BY id"
+                )],
+                "tags": [tuple(row) for row in conn.execute(
+                    "SELECT transaction_id, tag_id FROM transaction_tags ORDER BY transaction_id, tag_id"
+                )],
+            }
+        finally:
+            conn.close()
+
+    def set_category_id(self, transaction_id, category_id):
+        conn = connect_database(self.db_path)
+        try:
+            conn.execute("UPDATE transactions SET category_id = ? WHERE id = ?", (category_id, transaction_id))
+            conn.commit()
+        finally:
+            conn.close()
+
     def test_seven_case_dry_run_is_read_only_and_apply_preserves_financial_values(self):
         before = self.legacy_snapshot()
         database_bytes = self.db_path.read_bytes()
@@ -79,6 +102,13 @@ class HistoryMigrationTest(unittest.TestCase):
         first = normalize_history(self.db_path, apply=True)
         second = normalize_history(self.db_path, apply=True)
         self.assertNotEqual(first["backup_path"], second["backup_path"])
+        conn = connect_database(self.db_path)
+        conn.execute(
+            "INSERT INTO categories (id, name, type, icon, keywords, parent_id, sort_order, is_active) "
+            "VALUES ('legacy_ai', '旧数字服务', 'expense', '', '', NULL, 99, 1)"
+        )
+        conn.execute("UPDATE transactions SET category_id = 'legacy_ai' WHERE id = 'ai'")
+        conn.commit(); conn.close()
         before = self.legacy_snapshot()
         conn = connect_database(self.db_path)
         conn.execute("CREATE TRIGGER corrupt_balance AFTER UPDATE ON transactions BEGIN UPDATE accounts SET current_balance = current_balance + 1; END")
@@ -86,6 +116,105 @@ class HistoryMigrationTest(unittest.TestCase):
         with self.assertRaises(HistoryMigrationError):
             normalize_history(self.db_path, apply=True)
         self.assertEqual(before, self.legacy_snapshot())
+
+    def test_apply_preserves_an_unmatched_existing_category_and_marks_it_for_review(self):
+        conn = connect_database(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO categories (id, name, type, icon, keywords, parent_id, sort_order, is_active) "
+                "VALUES ('legacy_uncertain', '旧分类', 'expense', '', '', NULL, 99, 1)"
+            )
+            conn.execute("UPDATE transactions SET category_id = 'legacy_uncertain' WHERE id = 'ambiguous'")
+            conn.execute("INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ('ambiguous', 'family_member_a')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        preview = normalize_history(self.db_path)
+        self.assertEqual(preview["preserved_existing"], 1)
+        self.assertGreaterEqual(preview["unmatched"], 1)
+        self.assertTrue(preview["review_examples"])
+
+        result = normalize_history(self.db_path, apply=True)
+        self.assertEqual(result["preserved_existing"], 1)
+        conn = connect_database(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT category_id, classification_status FROM transactions WHERE id = 'ambiguous'"
+            ).fetchone()
+            self.assertEqual(row["category_id"], "legacy_uncertain")
+            self.assertEqual(row["classification_status"], "needs_review")
+            self.assertEqual(
+                [row[0] for row in conn.execute("SELECT tag_id FROM transaction_tags WHERE transaction_id = 'ambiguous'")],
+                ["family_member_a"],
+            )
+        finally:
+            conn.close()
+
+    def test_apply_updates_a_valid_proposed_category_and_is_a_no_op_when_repeated(self):
+        conn = connect_database(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO categories (id, name, type, icon, keywords, parent_id, sort_order, is_active) "
+                "VALUES ('legacy_food', '旧餐饮', 'expense', '', '', NULL, 99, 1)"
+            )
+            conn.execute("UPDATE transactions SET category_id = 'legacy_food' WHERE id = 'member-a-lunch-1'")
+            conn.commit()
+        finally:
+            conn.close()
+
+        first = normalize_history(self.db_path, apply=True)
+        second = normalize_history(self.db_path, apply=True)
+        self.assertGreaterEqual(first["updated"], 1)
+        self.assertEqual(second["updated"], 0)
+        self.assertGreaterEqual(second["no_op"], 1)
+        conn = connect_database(self.db_path)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT category_id FROM transactions WHERE id = 'member-a-lunch-1'").fetchone()[0],
+                "expense_dining_meal",
+            )
+        finally:
+            conn.close()
+
+    def test_apply_keeps_an_originally_uncategorized_record_empty(self):
+        result = normalize_history(self.db_path, apply=True)
+        self.assertGreaterEqual(result["remained_uncategorized"], 1)
+        conn = connect_database(self.db_path)
+        try:
+            self.assertIsNone(conn.execute("SELECT category_id FROM transactions WHERE id = 'ambiguous'").fetchone()[0])
+        finally:
+            conn.close()
+
+    def test_apply_preserves_a_dangling_category_id_instead_of_clearing_it(self):
+        self.set_category_id("ambiguous", "dangling_category_id")
+        result = normalize_history(self.db_path, apply=True)
+        self.assertGreaterEqual(result["preserved_existing"], 1)
+        self.assertGreaterEqual(result["unmatched"], 1)
+        conn = connect_database(self.db_path)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT category_id FROM transactions WHERE id = 'ambiguous'").fetchone()[0],
+                "dangling_category_id",
+            )
+        finally:
+            conn.close()
+
+    def test_apply_rolls_back_category_and_tag_changes_when_a_write_fails(self):
+        conn = connect_database(self.db_path)
+        try:
+            conn.execute("INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ('member-a-lunch-1', 'family_member_b')")
+            conn.execute(
+                "CREATE TRIGGER fail_history_write AFTER UPDATE ON transactions "
+                "WHEN NEW.id = 'member-a-lunch-2' BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        before = self.migration_snapshot()
+        with self.assertRaises(sqlite3.IntegrityError):
+            normalize_history(self.db_path, apply=True)
+        self.assertEqual(before, self.migration_snapshot())
 
     def test_csv_mode_reads_a_synthetic_ledger_without_creating_or_modifying_a_database(self):
         csv_path = Path(self.temp_dir.name) / "sample-ledger.csv"

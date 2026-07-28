@@ -39,7 +39,7 @@ class SeedTaxonomyUpgradeTest(unittest.TestCase):
             "expense_family_child_education",
         )
 
-    def test_preview_is_read_only_and_apply_keeps_financial_snapshot(self):
+    def test_unmatched_legacy_category_is_preserved_and_remains_active_while_referenced(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "wallet.db"
             backup_dir = Path(directory) / "backups"
@@ -66,7 +66,11 @@ class SeedTaxonomyUpgradeTest(unittest.TestCase):
 
             preview = upgrade_seed_taxonomy(db_path, apply=False)
             self.assertFalse(preview["applied"])
-            self.assertEqual(preview["categories_to_deactivate"], 1)
+            self.assertEqual(preview["categories_to_deactivate"], 0)
+            self.assertEqual(preview["preserved_existing"], 1)
+            self.assertEqual(preview["unmatched"], 1)
+            self.assertEqual(preview["review_examples"][0]["record"], "record-1")
+            self.assertNotIn("description", preview["review_items"][0])
             self.assertEqual(_snapshot_path(db_path), before)
 
             result = upgrade_seed_taxonomy(db_path, apply=True, backup_dir=backup_dir)
@@ -76,11 +80,46 @@ class SeedTaxonomyUpgradeTest(unittest.TestCase):
             conn = connect_database(db_path)
             try:
                 self.assertEqual(
-                    conn.execute("SELECT is_active FROM categories WHERE id = 'legacy_food'").fetchone()[0], 0
+                    conn.execute("SELECT is_active FROM categories WHERE id = 'legacy_food'").fetchone()[0], 1
                 )
                 self.assertEqual(
-                    conn.execute("SELECT category_id FROM transactions WHERE id = 't1'").fetchone()[0], "expense_other_pending"
+                    conn.execute("SELECT category_id FROM transactions WHERE id = 't1'").fetchone()[0], "legacy_food"
                 )
+                self.assertEqual(
+                    conn.execute("SELECT classification_status FROM transactions WHERE id = 't1'").fetchone()[0], "needs_review"
+                )
+            finally:
+                conn.close()
+
+    def test_verified_legacy_mapping_updates_and_then_does_not_deactivate_referenced_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "wallet.db"
+            initialize_database_path(db_path)
+            conn = connect_database(db_path)
+            try:
+                conn.execute("INSERT INTO accounts (id, name, type, current_balance) VALUES ('a1', '测试账户', 'cash', 88)")
+                conn.executemany(
+                    "INSERT INTO categories (id, name, type, icon, keywords, parent_id, sort_order, is_active) "
+                    "VALUES (?, ?, 'expense', '', '', ?, 99, 1)",
+                    (("legacy_food_root", "餐饮", None), ("legacy_food_child", "正餐", "legacy_food_root")),
+                )
+                conn.execute(
+                    "INSERT INTO transactions (id, account_id, timestamp, amount, description, category_id, "
+                    "transaction_kind, excluded_from_stats, classification_status) "
+                    "VALUES ('t1', 'a1', '2026-07-26T00:00:00+00:00', -12, '测试消费', 'legacy_food_child', "
+                    "'expense', 0, 'manual')"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            first = upgrade_seed_taxonomy(db_path, apply=True)
+            second = upgrade_seed_taxonomy(db_path, apply=True)
+            self.assertEqual(first["updated"], 1)
+            self.assertEqual(second["updated"], 0)
+            conn = connect_database(db_path)
+            try:
+                self.assertEqual(conn.execute("SELECT category_id FROM transactions WHERE id = 't1'").fetchone()[0], "expense_dining_meal")
             finally:
                 conn.close()
 

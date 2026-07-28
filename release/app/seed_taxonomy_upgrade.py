@@ -34,22 +34,23 @@ def upgrade_seed_taxonomy(db_path, apply=False, backup_dir=None):
     backup_path = _create_backup(db_path, backup_dir)
     conn = connect_database(db_path)
     try:
-        preview = _preview(conn)
         before = _financial_snapshot(conn)
         conn.execute("BEGIN IMMEDIATE")
         try:
             _seed_categories(conn)
             _seed_tags(conn)
             managed_ids = _managed_category_ids()
-            _deactivate_retired_categories(conn, managed_ids)
-            _migrate_transactions(conn, _transaction_migrations(conn, managed_ids))
+            migrations = _transaction_migrations(conn, managed_ids)
+            _migrate_transactions(conn, migrations)
+            retired = _retired_category_ids(conn, managed_ids)
+            _deactivate_retired_categories(conn, retired)
             _assert_financial_snapshot(conn, before)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
         return {
-            **preview,
+            **_report(conn, migrations, retired),
             "applied": True,
             "active_categories": _active_category_count(conn),
             "backup_path": str(backup_path),
@@ -62,16 +63,34 @@ def _preview(conn):
     managed_ids = _managed_category_ids()
     retired = _retired_category_ids(conn, managed_ids)
     migrations = _transaction_migrations(conn, managed_ids)
-    review_items = [item for item in migrations if item["needs_review"]]
+    return {**_report(conn, migrations, retired), "applied": False}
+
+
+def _report(conn, migrations, retired):
+    review_items = [item for item in migrations if item["action"] in {"preserve_existing", "remain_uncategorized", "failed"}]
+    actions = {name: sum(item["action"] == name for item in migrations) for name in (
+        "update", "preserve_existing", "remain_uncategorized", "failed", "no_op"
+    )}
+    review_examples = [
+        {"record": f"record-{index}", "action": item["action"], "reason": item["reason"]}
+        for index, item in enumerate(review_items[:3], 1)
+    ]
     return {
-        "applied": False,
         "active_categories_before": _active_category_count(conn),
         "seed_roots": len(load_category_seed()["roots"]),
-        "categories_to_upsert": len(managed_ids),
+        "categories_to_upsert": len(_managed_category_ids()),
         "categories_to_deactivate": len(retired),
-        "transactions_auto_mapped": sum(not item["needs_review"] for item in migrations),
+        "transactions_auto_mapped": actions["update"] + actions["no_op"],
         "transactions_needing_review": len(review_items),
-        "review_items": review_items,
+        "review_items": review_examples,
+        "total": len(migrations),
+        "updated": actions["update"],
+        "preserved_existing": actions["preserve_existing"],
+        "remained_uncategorized": actions["remain_uncategorized"],
+        "unmatched": actions["preserve_existing"] + actions["remain_uncategorized"],
+        "failed": actions["failed"],
+        "no_op": actions["no_op"],
+        "review_examples": review_examples,
     }
 
 
@@ -87,17 +106,19 @@ def _retired_category_ids(conn, managed_ids):
     return [
         row["id"]
         for row in conn.execute(
-            "SELECT id FROM categories WHERE is_active = 1 AND id NOT IN (" + _placeholders(managed_ids) + ")",
+            "SELECT c.id FROM categories c WHERE c.is_active = 1 AND c.id NOT IN (" + _placeholders(managed_ids) + ") "
+            "AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.category_id = c.id)",
             tuple(sorted(managed_ids)),
         )
     ]
 
 
-def _deactivate_retired_categories(conn, managed_ids):
+def _deactivate_retired_categories(conn, retired_ids):
+    if not retired_ids:
+        return
     conn.execute(
-        "UPDATE categories SET is_active = 0 "
-        "WHERE id NOT IN (" + _placeholders(managed_ids) + ")",
-        tuple(sorted(managed_ids)),
+        "UPDATE categories SET is_active = 0 WHERE id IN (" + _placeholders(retired_ids) + ")",
+        tuple(sorted(retired_ids)),
     )
 
 
@@ -127,30 +148,58 @@ def _transaction_migrations(conn, managed_ids):
             tag_ids,
             transaction_kind=row["transaction_kind"] or "",
         )
-        needs_review = target is None
+        valid_target = _valid_target_category(conn, target, row["transaction_kind"] or "")
+        if row["category_id"]:
+            action = "update" if valid_target else "preserve_existing"
+        else:
+            action = "update" if valid_target else "remain_uncategorized"
         items.append({
             "transaction_id": row["id"],
+            "previous_category_id": row["category_id"],
             "category_id": row["category_id"],
             "primary_name": row["primary_name"],
             "secondary_name": row["secondary_name"],
             "description": row["description"],
-            "target_category_id": target or "expense_other_pending",
-            "reason": reason,
-            "needs_review": needs_review,
+            "proposed_category_id": target,
+            "target_category_id": target if valid_target else None,
+            "action": action,
+            "reason": reason if valid_target else ("no_reliable_category" if target is None else "invalid_or_inactive_category"),
+            "needs_review": action != "update",
         })
     return items
 
 
 def _migrate_transactions(conn, migrations):
     for item in migrations:
-        conn.execute(
-            "UPDATE transactions SET category_id = ?, classification_status = ? WHERE id = ?",
-            (
-                item["target_category_id"],
-                "needs_review" if item["needs_review"] else "classified",
-                item["transaction_id"],
-            ),
-        )
+        if item["action"] == "update":
+            conn.execute(
+                "UPDATE transactions SET category_id = ?, classification_status = 'classified' WHERE id = ?",
+                (item["target_category_id"], item["transaction_id"]),
+            )
+        elif item["action"] in {"preserve_existing", "remain_uncategorized", "failed"}:
+            conn.execute(
+                "UPDATE transactions SET classification_status = 'needs_review' "
+                "WHERE id = ? AND classification_status != 'needs_review'",
+                (item["transaction_id"],),
+            )
+
+
+def _valid_target_category(conn, category_id, transaction_kind):
+    if not category_id:
+        return False
+    row = conn.execute("SELECT type FROM categories WHERE id = ? AND is_active = 1", (category_id,)).fetchone()
+    if row is None:
+        return False
+    expected_types = {
+        "expense": {"expense"},
+        "refund": {"expense"},
+        "income": {"income"},
+        "transfer": {"transaction"},
+        "credit_repayment": {"transaction"},
+        "topup_withdrawal": {"transaction"},
+        "balance_adjustment": {"transaction"},
+    }.get(transaction_kind, set())
+    return row["type"] in expected_types
 
 
 def resolve_legacy_target(primary, secondary, description, tag_ids, transaction_kind=""):

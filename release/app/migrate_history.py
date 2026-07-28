@@ -6,9 +6,11 @@ import json
 import re
 import shutil
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any, Optional, Tuple
 
 from classifier import classify_transaction
 from db import connect_database, initialize_database_path
@@ -16,6 +18,23 @@ from db import connect_database, initialize_database_path
 
 class HistoryMigrationError(RuntimeError):
     """Raised when a migration cannot preserve its financial invariants."""
+
+
+@dataclass(frozen=True)
+class MigrationProposal:
+    transaction_id: str
+    previous_category_id: Optional[str]
+    proposed_category_id: Optional[str]
+    action: str
+    classification: Optional[Any]
+    reason: str
+    current_tag_ids: Tuple[str, ...]
+
+    @property
+    def classification_status(self):
+        if self.action in {"preserve_existing", "remain_uncategorized", "failed"}:
+            return "needs_review"
+        return self.classification.classification_status
 
 
 def analyze_csv(csv_path):
@@ -58,18 +77,8 @@ def normalize_history(db_path, apply=False, backup_dir=None):
         proposed = _proposals(conn, rows_before)
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for transaction_id, classification in proposed:
-                conn.execute(
-                    "UPDATE transactions SET category_id = ?, transaction_kind = ?, excluded_from_stats = ?, "
-                    "classification_status = ? WHERE id = ?",
-                    (classification.category_id, classification.transaction_kind,
-                     int(classification.excluded_from_stats), classification.classification_status, transaction_id),
-                )
-                conn.execute("DELETE FROM transaction_tags WHERE transaction_id = ?", (transaction_id,))
-                conn.executemany(
-                    "INSERT INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
-                    ((transaction_id, tag_id) for tag_id in classification.tag_ids),
-                )
+            for proposal in proposed:
+                _apply_proposal(conn, proposal)
             rows_after = _database_rows(conn)
             checksum_after = _checksum(row["amount"] for row in rows_after)
             balances_after = _balances(conn)
@@ -100,12 +109,127 @@ def _database_rows(conn):
 
 
 def _proposals(conn, rows):
-    return [
-        (row["id"], classify_transaction(
+    return [_proposal(conn, row) for row in rows]
+
+
+def _proposal(conn, row):
+    previous_category_id = row["category_id"]
+    current_tag_ids = _transaction_tag_ids(conn, row["id"])
+    try:
+        classification = classify_transaction(
             conn, row["description"], row["category"], row["amount"],
             source_account={"name": row["account_name"], "type": row["account_type"]},
-        )) for row in rows
-    ]
+        )
+        proposed_category_id = classification.category_id
+        valid_target = _valid_target_category(conn, proposed_category_id, classification.transaction_kind)
+        if previous_category_id:
+            if not valid_target:
+                return MigrationProposal(
+                    row["id"], previous_category_id, proposed_category_id, "preserve_existing", classification,
+                    "no_reliable_category" if proposed_category_id is None else "invalid_or_inactive_category",
+                    current_tag_ids,
+                )
+            if _is_no_op(row, classification, current_tag_ids):
+                return MigrationProposal(
+                    row["id"], previous_category_id, proposed_category_id, "no_op", classification,
+                    "already_at_verified_target", current_tag_ids,
+                )
+            return MigrationProposal(
+                row["id"], previous_category_id, proposed_category_id, "update", classification,
+                "verified_category", current_tag_ids,
+            )
+        if valid_target:
+            return MigrationProposal(
+                row["id"], None, proposed_category_id, "update", classification,
+                "verified_category", current_tag_ids,
+            )
+        if _is_no_op(row, classification, current_tag_ids):
+            return MigrationProposal(
+                row["id"], None, proposed_category_id, "no_op", classification,
+                "already_uncategorized", current_tag_ids,
+            )
+        return MigrationProposal(
+            row["id"], None, proposed_category_id, "remain_uncategorized", classification,
+            "no_reliable_category" if proposed_category_id is None else "invalid_or_inactive_category",
+            current_tag_ids,
+        )
+    except Exception:
+        return MigrationProposal(
+            row["id"], previous_category_id, None, "failed", None,
+            "classification_failed", current_tag_ids,
+        )
+
+
+def _valid_target_category(conn, category_id, transaction_kind):
+    if not category_id:
+        return False
+    row = conn.execute("SELECT type FROM categories WHERE id = ? AND is_active = 1", (category_id,)).fetchone()
+    if row is None:
+        return False
+    expected_types = {
+        "expense": {"expense"},
+        "refund": {"expense"},
+        "income": {"income"},
+    }.get(transaction_kind, set())
+    return row["type"] in expected_types
+
+
+def _transaction_tag_ids(conn, transaction_id):
+    return tuple(row["tag_id"] for row in conn.execute(
+        "SELECT tag_id FROM transaction_tags WHERE transaction_id = ? ORDER BY tag_id", (transaction_id,)
+    ))
+
+
+def _is_no_op(row, classification, current_tag_ids):
+    return (
+        row["category_id"] == classification.category_id
+        and row["transaction_kind"] == classification.transaction_kind
+        and int(row["excluded_from_stats"] or 0) == int(classification.excluded_from_stats)
+        and row["classification_status"] == classification.classification_status
+        and current_tag_ids == tuple(sorted(classification.tag_ids))
+    )
+
+
+def _apply_proposal(conn, proposal):
+    if proposal.action == "no_op":
+        return
+    if proposal.action == "update":
+        classification = proposal.classification
+        conn.execute(
+            "UPDATE transactions SET category_id = ?, transaction_kind = ?, excluded_from_stats = ?, "
+            "classification_status = ? WHERE id = ?",
+            (proposal.proposed_category_id, classification.transaction_kind,
+             int(classification.excluded_from_stats), classification.classification_status, proposal.transaction_id),
+        )
+        conn.execute("DELETE FROM transaction_tags WHERE transaction_id = ?", (proposal.transaction_id,))
+        conn.executemany(
+            "INSERT INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
+            ((proposal.transaction_id, tag_id) for tag_id in classification.tag_ids),
+        )
+        return
+    if proposal.action == "remain_uncategorized":
+        classification = proposal.classification
+        # The category was already empty.  Deliberately omit category_id from
+        # this update so None is never used as an implicit clearing command.
+        conn.execute(
+            "UPDATE transactions SET transaction_kind = ?, excluded_from_stats = ?, classification_status = ? "
+            "WHERE id = ?",
+            (classification.transaction_kind, int(classification.excluded_from_stats),
+             classification.classification_status, proposal.transaction_id),
+        )
+        conn.execute("DELETE FROM transaction_tags WHERE transaction_id = ?", (proposal.transaction_id,))
+        conn.executemany(
+            "INSERT INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
+            ((proposal.transaction_id, tag_id) for tag_id in classification.tag_ids),
+        )
+        return
+    # A missing or unsafe proposed category is never a request to clear an
+    # existing value.  Keep categories and tags untouched; only surface review.
+    conn.execute(
+        "UPDATE transactions SET classification_status = 'needs_review' "
+        "WHERE id = ? AND classification_status != 'needs_review'",
+        (proposal.transaction_id,),
+    )
 
 
 def _balances(conn):
@@ -134,8 +258,19 @@ def _create_backup(db_path, backup_dir=None):
 
 
 def _report(total, proposed, checksum, balances_unchanged, applied):
-    classifications = [item[1] if isinstance(item, tuple) else item for item in proposed]
-    automatic = sum(item.classification_status != "needs_review" for item in classifications)
+    classifications = [item.classification if isinstance(item, MigrationProposal) else item for item in proposed]
+    automatic = sum(
+        item is not None and item.classification_status != "needs_review" for item in classifications
+    )
+    actions = {name: sum(getattr(item, "action", None) == name for item in proposed) for name in (
+        "update", "preserve_existing", "remain_uncategorized", "failed", "no_op"
+    )}
+    review_examples = []
+    for item in proposed:
+        if getattr(item, "action", None) in {"preserve_existing", "remain_uncategorized", "failed"}:
+            review_examples.append({"record": f"record-{len(review_examples) + 1}", "reason": item.reason})
+        if len(review_examples) == 3:
+            break
     report = {
         "total_transactions": total,
         "auto_classified": automatic,
@@ -144,6 +279,13 @@ def _report(total, proposed, checksum, balances_unchanged, applied):
         "amount_checksum_after": _decimal_text(checksum),
         "balances_unchanged": balances_unchanged,
         "applied": applied,
+        "updated": actions["update"],
+        "preserved_existing": actions["preserve_existing"],
+        "remained_uncategorized": actions["remain_uncategorized"],
+        "unmatched": actions["preserve_existing"] + actions["remain_uncategorized"],
+        "failed": actions["failed"],
+        "no_op": actions["no_op"],
+        "review_examples": review_examples,
     }
     report["total_records"] = total
     report["transaction_amount_before"] = report["amount_checksum_before"]
