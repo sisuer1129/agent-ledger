@@ -4,6 +4,10 @@ Agent Ledger is a self-hosted personal finance ledger designed for AI-agent-driv
 
 > **Early-stage project.** Review transactions before relying on them. This is not a bank, provides no bank-grade security guarantee or perfect automatic classification guarantee, and is not intended for enterprise accounting.
 
+![Agent Ledger 中文首页截图（使用虚构 Demo 数据）](docs/images/agent-ledger-dashboard-zh.png)
+
+Screenshot uses fully synthetic demo data.
+
 ## Quick Start
 
 The current release was verified with Python 3.9.6. Compatibility with other Python versions has not yet been systematically tested. Node.js is needed for the frontend tests, and a shell with `curl` is needed for the API example below.

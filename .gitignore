@@ -37,6 +37,10 @@ release/reports/
 *.gif
 *.webp
 
+# Intentionally published README screenshot using synthetic demo data
+!docs/images/
+!docs/images/agent-ledger-dashboard-zh.png
+
 # Local tooling
 .venv/
 __pycache__/
