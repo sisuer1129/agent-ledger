@@ -24,6 +24,9 @@ export const buildExportPath = (filters, nonce = Date.now()) => {
   return `/export.csv?${query}`;
 };
 export const budgetState = (percent) => (percent >= 100 ? 'over' : percent >= 80 ? 'warning' : 'normal');
+export const monthlyBalance = ({ income = 0, expense = 0, refunds = 0 } = {}) => (
+  Number(income || 0) - Number(expense || 0) + Number(refunds || 0)
+);
 export const normalizeTransactionAmount = (value, kind) => {
   const amount = Math.abs(Number(value || 0));
   return kind === 'expense' ? -amount : amount;
@@ -440,7 +443,7 @@ async function refreshOverview() {
     api(`/overview?year=${now.getFullYear()}&month=${now.getMonth() + 1}`),
     api(`/budget-summary?month=${month}`),
   ]);
-  document.querySelector('#overviewBalance').textContent = formatMoney(overview.income + overview.expense);
+  document.querySelector('#overviewBalance').textContent = formatMoney(monthlyBalance(overview));
   document.querySelector('#overviewIncome').textContent = formatMoney(overview.income);
   document.querySelector('#overviewExpense').textContent = formatMoney(overview.expense);
   document.querySelector('#mobileSummary').textContent = formatMoney(overview.net_assets);
