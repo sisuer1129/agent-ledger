@@ -2,7 +2,15 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Agent Ledger is a self-hosted personal finance ledger designed for AI-agent-driven bookkeeping. It combines a Flask and SQLite API with a static web interface, while keeping the operator in control of the local database and API key.
+Agent Ledger is a self-hosted personal finance system built for AI-agent-assisted bookkeeping. It pairs a Flask backend and SQLite database with a static web interface, so your ledger data and API key stay on hardware and servers you control. It is well suited to a NAS, VPS, or another personal server.
+
+I built it because I wanted a clearer view of my own cash flow. Vibe coding gave someone without a technical background a way to turn an idea I had been carrying around for a long time into something real.
+
+There are already many capable open-source and commercial budgeting apps. Agent Ledger is still a modest project by comparison, but it has one feature I find particularly useful: it can work with an AI agent through its API.
+
+Connect an agent to a chat platform such as WeChat or Telegram and you can log a transaction by sending a message or sharing a receipt screenshot. The agent extracts the relevant details and calls the API, so you do not have to open the app and fill out every field yourself.
+
+The workflow is deliberately lightweight and usually requires only a small number of model calls per entry. Agent Ledger is not tied to a particular model, agent, or chat platform, so you can assemble it around your own setup.
 
 > **Early-stage project.** Review transactions before relying on them. This is not a bank, provides no bank-grade security guarantee or perfect automatic classification guarantee, and is not intended for enterprise accounting.
 
