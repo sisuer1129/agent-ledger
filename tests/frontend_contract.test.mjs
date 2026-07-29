@@ -310,3 +310,44 @@ test('month switches ignore stale category and mobile statistics responses',()=>
   assert.match(appSource,/if \(requestToken !== taxonomyMonthRequestToken\) return;/);
   assert.match(appSource,/if \(requestToken !== mobileStatsRequestToken\) return;/);
 });
+
+test('desktop and mobile navigation expose synchronized active-page state',()=>{
+  assert.match(html,/data-page="overview"[^>]*aria-current="page"/);
+  assert.match(html,/data-mobile-tab="home"[^>]*aria-current="page"/);
+  assert.match(appSource,/function syncNavigationState\(page\)/);
+  assert.match(appSource,/syncNavigationState\(page\)/);
+  assert.match(appSource,/syncNavigationState\(mobilePageForTab\(tab\)\)/);
+  assert.match(css,/\.navlinks button\.is-active\s*\{[^}]*color:\s*var\(--accent\)[^}]*background:\s*#eaf4ff/);
+  assert.match(css,/\.bottomnav button\.is-active\s*\{[^}]*color:\s*var\(--accent\)/);
+  assert.match(css,/\.bottomnav button\.is-active::before\s*\{/);
+});
+
+test('empty and loading content uses shared state containers instead of loose meta text',()=>{
+  for (const token of ['list-state', 'panel-state', 'loading-state', 'error-state']) {
+    assert.ok(appSource.includes(token));
+    assert.ok(css.includes(`.${token}`));
+  }
+  assert.match(appSource,/function renderState\(kind, title, detail = '', action = ''\)/);
+  assert.match(appSource,/renderState\('panel-state', '选择一个账户'/);
+  assert.match(appSource,/renderState\('list-state', '暂无交易'/);
+  assert.match(css,/\.list-state, \.panel-state\s*\{[^}]*min-height:\s*132px[^}]*padding:\s*24px/);
+  assert.match(css,/\.loading-state::before\s*\{/);
+});
+
+test('unselected desktop account detail stays compact while loaded details retain their normal panel height',()=>{
+  assert.match(css,/\.detail-panel\s*\{[^}]*min-height:\s*380px/);
+  assert.match(css,/\.detail-panel:has\(\.panel-state\)\s*\{[^}]*min-height:\s*200px/);
+  assert.match(css,/\.detail-panel \.panel-state\s*\{[^}]*align-content:\s*start/);
+});
+
+test('mobile global status clears the fixed bottom navigation and safe area',()=>{
+  assert.match(css,/@media \(max-width: 899px\) \{[^]*?#status\s*\{[^}]*bottom:\s*calc\(var\(--mobile-nav-h\) \+ env\(safe-area-inset-bottom\) \+ 12px\)/);
+  assert.match(css,/:root\{[^}]*--mobile-nav-h:\s*72px/);
+});
+
+test('transaction dialog keeps its form actions reachable in a constrained mobile viewport',()=>{
+  assert.match(css,/#transactionDialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
+  assert.match(css,/#transactionDialog \.dialog-actions\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
+  assert.match(css,/@media \(max-width: 360px\) \{[^]*?\.transaction-mode\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(css,/#transactionDialog \.category-picker\s*\{[^}]*max-height:/);
+});
