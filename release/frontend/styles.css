@@ -63,9 +63,9 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .budget-total-card strong { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
 .overview-top-cards { display: grid; gap: 16px; }
 .overview-summary-card, .overview-budget-card { border: 1px solid var(--hairline); border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--sh-card); }
-.overview-summary-card { display: grid; align-content: start; gap: 2px; padding: 14px; }
+.overview-summary-card { display: grid; align-content: start; gap: 2px; padding: 18px; }
 .overview-summary-label { margin: 8px 0 0; color: var(--text-3); font-size: 13px; }
-.overview-summary-card > strong { font-size: 28px; line-height: 1.2; letter-spacing: -.025em; font-variant-numeric: tabular-nums; }
+.overview-summary-card > strong { font-size: 32px; line-height: 1.2; letter-spacing: -.025em; font-variant-numeric: tabular-nums; }
 .overview-summary-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); }
 .overview-summary-metrics span { display: grid; gap: 2px; min-width: 0; }
 .overview-summary-metrics small { color: var(--text-3); font-size: 12px; }
@@ -82,6 +82,7 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .overview-budget-alerts { display: grid; align-content: center; gap: 7px; padding-left: 18px; border-left: 1px solid var(--hairline); }
 .overview-budget-alert-title { color: var(--text-3); font-size: 12px; font-weight: 600; }
 .overview-budget-alert { background: transparent; font-size: 13px; line-height: 1.45; }
+.overview-budget-alert-more { color: var(--accent); font-size: 13px; font-weight: 600; }
 .budget-total-card .meta { margin: 2px 0 0; }
 .budget-category-row { align-items: flex-start; }
 .budget-category-row > div { min-width: 0; }
@@ -108,11 +109,22 @@ dialog [data-budget-object][hidden] { display: none; }
 .detail-panel:has(.panel-state) { min-height: 200px; }
 .detail-panel .panel-state { align-content: start; }
 .detail-panel > .page-head { gap: 12px; }
+.detail-period-section, .detail-summary-section { display: grid; gap: 8px; margin-top: 18px; }
+.detail-section-label { margin: 0; color: var(--text-3); font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+.detail-summary-section > .meta { margin: -2px 0 0; }
+.detail-analysis-section { margin-top: 24px; }
+.detail-analysis-section > .detail-section-label, .detail-transactions-section > .detail-section-label { display: block; margin-bottom: 10px; }
+.detail-transactions-section { margin-top: 24px; }
 .detail-controls, .metrics, .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.chartbox { position: relative; height: 270px; min-height: 270px; padding-top: 16px; border-top: 1px solid var(--hairline); overflow: hidden; }
+.chartbox { position: relative; height: 320px; min-height: 320px; padding-top: 14px; border-top: 1px solid var(--hairline); overflow: hidden; }
+.chartbox-head { display: grid; gap: 1px; margin-bottom: 8px; }
+.chartbox-head h3, .chartbox-head p { margin: 0; }
+.chartbox-head h3 { font-size: 14px; letter-spacing: -.01em; }
+.chartbox-head p { color: var(--text-3); font-size: 12px; }
 .chartbox canvas { display: block !important; width: 100% !important; height: 240px !important; max-height: 240px !important; }
-.chart-empty { display: grid; min-height: 190px; place-items: center; color: var(--text-3); }
+.chart-empty { display: grid; min-height: 240px; margin: 0; place-items: center; color: var(--text-3); }
+.chartbox:has(.chart-empty:not([hidden])) canvas { display: none !important; }
 .page-head { display: flex; align-items: center; justify-content: space-between; }
 .filters { display: grid; gap: 8px; margin: 12px 0; }
 .filter-main { display: grid; grid-template-columns: minmax(180px, 1.5fr) repeat(2, minmax(126px, .9fr)) repeat(2, minmax(148px, 1fr)) minmax(122px, .8fr) auto; gap: 8px; align-items: center; }
@@ -188,7 +200,7 @@ dialog label { display: grid; gap: 6px; color: var(--text-2); }
 .mobile-category-budget span { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .mobile-category-budget > strong { padding-top: 2px; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #mobileApp, .fab, .bottomnav { display: none; }
-@media (min-width: 900px) { #desktopWorkspace { display: block; } .overview-top-cards { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); } .budget-category-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } #ledgerRows .ledger-column-head, #ledgerRows .transaction-row { display: grid; grid-template-columns: minmax(240px,1.2fr) minmax(160px,.85fr) 110px 76px; gap: 16px; } #ledgerRows .ledger-column-head { align-items: center; min-height: 42px; padding: 0 16px; border-bottom: 1px solid var(--hairline); background: var(--hover); color: var(--text-3); font-size: 12px; font-weight: 650; letter-spacing: .04em; } #ledgerRows .transaction-main { min-width: 0; } .transaction-mobile-category .ledger-category, #ledgerRows .ledger-category { display: inline-flex; justify-self: start; } #ledgerRows .transaction-mobile-category { display: none; } #ledgerRows .transaction-row .amount { margin-left: 0; justify-self: start; } #ledgerRows .transaction-row > button { justify-self: start; min-width: 56px; padding: 0 6px; white-space: nowrap; } #ledgerRows .ledger-action-placeholder { justify-self: start; } }
+@media (min-width: 900px) { #desktopWorkspace { display: block; } .overview-top-cards { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .budget-category-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } #ledgerRows .ledger-column-head, #ledgerRows .transaction-row { display: grid; grid-template-columns: minmax(240px,1.2fr) minmax(160px,.85fr) 110px 76px; gap: 16px; } #ledgerRows .ledger-column-head { align-items: center; min-height: 42px; padding: 0 16px; border-bottom: 1px solid var(--hairline); background: var(--hover); color: var(--text-3); font-size: 12px; font-weight: 650; letter-spacing: .04em; } #ledgerRows .transaction-main { min-width: 0; } .transaction-mobile-category .ledger-category, #ledgerRows .ledger-category { display: inline-flex; justify-self: start; } #ledgerRows .transaction-mobile-category { display: none; } #ledgerRows .transaction-row .amount { margin-left: 0; justify-self: start; } #ledgerRows .transaction-row > button { justify-self: start; min-width: 56px; padding: 0 6px; white-space: nowrap; } #ledgerRows .ledger-action-placeholder { justify-self: start; } }
 @media (max-width: 899px) { #desktopWorkspace { display: none; } .overview-top-cards { grid-template-columns: 1fr; } #mobileApp { display: block; padding-bottom: calc(var(--mobile-nav-h) + 12px + env(safe-area-inset-bottom)); } .mobile-head { display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 18px; border-bottom: 1px solid var(--hairline); background: var(--surface); } #mobileContent { padding: 16px; } .fab { position: fixed; right: 20px; bottom: calc(var(--mobile-nav-h) + env(safe-area-inset-bottom) + 14px); z-index: 6; display: flex; width: 56px; height: 56px; padding: 0; border-radius: 50%; color: #fff; background: var(--accent); box-shadow: var(--sh-panel); } .bottomnav { position: fixed; right: 0; bottom: 0; left: 0; display: flex; height: var(--mobile-nav-h); padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--hairline); background: rgba(255,255,255,.9); backdrop-filter: blur(16px) saturate(180%); } .bottomnav button { position: relative; flex: 1; flex-direction: column; gap: 1px; padding: 4px; font-size: 12px; } .bottomnav button.is-active { color: var(--accent); font-weight: 650; } .bottomnav button.is-active::before { position: absolute; top: 0; width: 20px; height: 2px; border-radius: 0 0 var(--r-pill) var(--r-pill); background: var(--accent); content: ''; } #status { bottom: calc(var(--mobile-nav-h) + env(safe-area-inset-bottom) + 12px); } .workspace { display: block; } .ledger-category { display: none; } .transaction-mobile-category { display: inline-block; max-width: 100%; margin: 5px 0 0 4px; vertical-align: top; } .transaction-mobile-category .ledger-category { display: inline-flex; } .budget-progress { width: 100%; } }
 @media (max-width: 360px) { .transaction-mode { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 680px) { .ledger-row, .account-row { padding: 10px 12px; } .charts { grid-template-columns: 1fr; } .page { padding: 20px 14px; } h1 { font-size: 32px; } }

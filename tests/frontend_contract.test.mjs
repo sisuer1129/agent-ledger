@@ -11,7 +11,7 @@ test('responsive wallet shell contract',()=>{
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
   assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260729-overview-balance1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
-  for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 270px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
+  for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
 test('desktop overview uses aligned master-detail account cards',()=>{
@@ -252,7 +252,7 @@ test('desktop overview pairs monthly summary with the shared budget summary',()=
   assert.match(appSource,/overviewBalance.*monthlyBalance\(overview\)/);
   assert.match(appSource,/overview-budget-main/);
   assert.match(appSource,/overview-budget-alerts/);
-  assert.match(css,/\.overview-top-cards\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*1\.3fr\)/);
+  assert.match(css,/\.overview-top-cards\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(0,\s*1fr\)/);
   assert.match(css,/\.overview-budget-alert\s*\{[^}]*background:\s*transparent/);
   assert.match(css,/@media \(max-width: 899px\)\s*\{[\s\S]*\.overview-top-cards\s*\{[^}]*grid-template-columns:\s*1fr/);
 });
@@ -260,8 +260,14 @@ test('desktop budget card gives classification alerts a calm, readable side pane
   assert.match(appSource,/overview-budget-alert-title">分类提醒/);
   assert.match(appSource,/overview-budget-link"[^>]*>查看预算详情 ›/);
   assert.match(css,/\.overview-budget-content\.has-alerts\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*\.58fr\) minmax\(0,\s*\.42fr\)/);
-  assert.match(css,/\.overview-summary-card\s*\{[^}]*padding:\s*14px/);
+  assert.match(css,/\.overview-summary-card\s*\{[^}]*padding:\s*18px/);
   assert.match(css,/\.overview-budget-alert-title\s*\{[^}]*color:\s*var\(--text-3\)/);
+});
+test('overview makes monthly balance primary and limits budget reminders to two items',()=>{
+  assert.match(appSource,/summary\.alerts\.slice\(0, 2\)/);
+  assert.match(appSource,/overview-budget-alert-more/);
+  assert.match(css,/\.overview-summary-card > strong\s*\{[^}]*font-size:\s*32px/);
+  assert.match(css,/\.overview-budget-alert-more\s*\{[^}]*color:\s*var\(--accent\)/);
 });
 test('budget alerts and transaction preview use explicit budget language',()=>{
   assert.equal(app.formatBudgetAlert({name:'餐饮',status:'warning',usage_rate:.9,remaining_amount:10}),'餐饮预算已用 90%');
@@ -338,6 +344,14 @@ test('unselected desktop account detail stays compact while loaded details retai
   assert.match(css,/\.detail-panel\s*\{[^}]*min-height:\s*380px/);
   assert.match(css,/\.detail-panel:has\(\.panel-state\)\s*\{[^}]*min-height:\s*200px/);
   assert.match(css,/\.detail-panel \.panel-state\s*\{[^}]*align-content:\s*start/);
+});
+
+test('desktop account detail has explicit sections and keeps chart titles for empty states',()=>{
+  const selectSource=appSource.match(/async function selectAccount\([\s\S]*?\n\}/)?.[0] || '';
+  for (const token of ['detail-period-section', 'detail-summary-section', 'detail-analysis-section', 'detail-transactions-section', '周期控制', '指标摘要', '图表分析', '交易明细', '支出趋势', '分类构成']) assert.ok(selectSource.includes(token));
+  assert.match(css,/\.chartbox-head\s*\{[^}]*margin-bottom:\s*8px/);
+  assert.match(css,/\.detail-transactions-section\s*\{[^}]*margin-top:\s*24px/);
+  assert.match(css,/\.chartbox:has\(\.chart-empty:not\(\[hidden\]\)\) canvas\s*\{[^}]*display:\s*none/);
 });
 
 test('mobile global status clears the fixed bottom navigation and safe area',()=>{

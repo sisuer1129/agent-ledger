@@ -474,10 +474,12 @@ async function refreshOverview() {
   document.querySelector('#overviewExpense').textContent = formatMoney(overview.expense);
   document.querySelector('#mobileSummary').textContent = formatMoney(overview.net_assets);
   const total = summary.total;
-  const alerts = summary.alerts.map((item) => `<span class="overview-budget-alert budget-${item.status}">${escapeHtml(formatBudgetAlert(item))}</span>`).join('');
+  const visibleAlerts = summary.alerts.slice(0, 2);
+  const alerts = visibleAlerts.map((item) => `<span class="overview-budget-alert budget-${item.status}">${escapeHtml(formatBudgetAlert(item))}</span>`).join('');
+  const alertsMore = summary.alerts.length > visibleAlerts.length ? '<span class="overview-budget-alert-more">查看全部</span>' : '';
   const headline = total.budget_amount === null ? '本月尚未设置总预算' : `${formatMoney(total.spent_amount)} / ${formatMoney(total.budget_amount)}`;
   const balance = total.budget_amount === null ? `已设置 ${summary.configured_category_count} 项分类预算` : total.remaining_amount < 0 ? `超支 ${formatMoney(-total.remaining_amount)}` : `剩余 ${formatMoney(total.remaining_amount)}`;
-  document.querySelector('#overviewBudgetCard').innerHTML = `<span class="overview-budget-content${alerts ? ' has-alerts' : ''}"><span class="overview-budget-main"><span class="eyebrow">本月预算</span><strong>${headline}</strong><small class="budget-${total.status}">${total.budget_amount === null ? balance : `${(total.usage_rate * 100).toFixed(0)}% · ${balance}`}</small>${total.budget_amount === null ? '' : budgetProgress(total, false)}</span>${alerts ? `<span class="overview-budget-alerts"><span class="overview-budget-alert-title">分类提醒</span>${alerts}</span>` : ''}</span><span class="overview-budget-link" aria-hidden="true">查看预算详情 ›</span>`;
+  document.querySelector('#overviewBudgetCard').innerHTML = `<span class="overview-budget-content${alerts ? ' has-alerts' : ''}"><span class="overview-budget-main"><span class="eyebrow">本月预算</span><strong>${headline}</strong><small class="budget-${total.status}">${total.budget_amount === null ? balance : `${(total.usage_rate * 100).toFixed(0)}% · ${balance}`}</small>${total.budget_amount === null ? '' : budgetProgress(total, false)}</span>${alerts ? `<span class="overview-budget-alerts"><span class="overview-budget-alert-title">分类提醒</span>${alerts}${alertsMore}</span>` : ''}</span><span class="overview-budget-link" aria-hidden="true">查看预算详情 ›</span>`;
   return overview;
 }
 
@@ -497,12 +499,12 @@ async function selectAccount(id, preserveMode = false) {
   const modeOptions = account.type === 'credit' && account.statement_day
     ? '<option value="billing_cycle">账单周期</option><option value="last_30_days">近 30 天</option><option value="calendar_month">自然月</option>'
     : '<option value="last_30_days">近 30 天</option><option value="calendar_month">自然月</option>';
+  const periodLabel = formatPeriod(detail.period_start, detail.period_end);
   document.querySelector('#accountDetail').innerHTML = `<div class="page-head"><h2>${escapeHtml(account.name)}</h2><div><button data-edit-account="${account.id}">编辑账户</button></div></div>
-    <div class="detail-controls"><select id="periodMode">${modeOptions}</select><input id="periodAnchor" type="date" value="${state.periodAnchor || today()}"><button id="refreshInsights">查看</button></div>
-    <p class="meta">${formatPeriod(detail.period_start, detail.period_end)}</p>
-    <div class="metrics"><strong>支出 ${formatMoney(detail.expense)}</strong>${budget ? `<span class="budget-${budgetState(used)}">预算 ${used.toFixed(0)}% · 剩余 ${formatMoney(Math.max(0, budget - detail.expense))}</span>` : ''}${forecast ? `<span>预计期末 ${formatMoney(forecast)}</span>` : ''}${detail.credit_limit !== undefined ? `<span>授信 ${formatMoney(detail.credit_limit)} · 已占用 ${formatMoney(detail.occupied_credit)} · 可用 ${formatMoney(detail.available_credit)}</span>` : ''}</div>
-    <div class="charts"><div class="chartbox"><canvas id="trendChart"></canvas><p id="trendEmpty" class="chart-empty" hidden>本期暂无支出趋势</p></div><div class="chartbox"><canvas id="categoryChart"></canvas><p id="categoryEmpty" class="chart-empty" hidden>本期暂无支出分类</p></div></div>
-    <div class="unified-list">${detail.transactions.map((item) => transactionRow(item)).join('') || renderState('list-state', '本期暂无交易', '记录一笔交易后会显示在这里。')}</div>`;
+    <section class="detail-period-section"><p class="detail-section-label">周期控制</p><div class="detail-controls"><select id="periodMode">${modeOptions}</select><input id="periodAnchor" type="date" value="${state.periodAnchor || today()}"><button id="refreshInsights">查看</button></div></section>
+    <section class="detail-summary-section"><p class="detail-section-label">指标摘要</p><p class="meta">${periodLabel}</p><div class="metrics"><strong>支出 ${formatMoney(detail.expense)}</strong>${budget ? `<span class="budget-${budgetState(used)}">预算 ${used.toFixed(0)}% · 剩余 ${formatMoney(Math.max(0, budget - detail.expense))}</span>` : ''}${forecast ? `<span>预计期末 ${formatMoney(forecast)}</span>` : ''}${detail.credit_limit !== undefined ? `<span>授信 ${formatMoney(detail.credit_limit)} · 已占用 ${formatMoney(detail.occupied_credit)} · 可用 ${formatMoney(detail.available_credit)}</span>` : ''}</div></section>
+    <section class="detail-analysis-section"><p class="detail-section-label">图表分析</p><div class="charts"><section class="chartbox"><header class="chartbox-head"><h3>支出趋势</h3><p>${periodLabel}</p></header><canvas id="trendChart"></canvas><p id="trendEmpty" class="chart-empty" hidden>本期暂无支出趋势</p></section><section class="chartbox"><header class="chartbox-head"><h3>分类构成</h3><p>${periodLabel}</p></header><canvas id="categoryChart"></canvas><p id="categoryEmpty" class="chart-empty" hidden>本期暂无支出分类</p></section></div></section>
+    <section class="detail-transactions-section"><p class="detail-section-label">交易明细</p><div class="unified-list">${detail.transactions.map((item) => transactionRow(item)).join('') || renderState('list-state', '本期暂无交易', '记录一笔交易后会显示在这里。')}</div></section>`;
   document.querySelector('#periodMode').value = state.periodMode;
   await loadChartLibrary().catch(() => null);
   renderCharts(detail, categoryPresentationMap());
