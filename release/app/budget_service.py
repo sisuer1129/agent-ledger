@@ -22,11 +22,12 @@ def _budget_record(budget_amount, spent_amount):
             "budget_amount": None, "spent_amount": spent_amount, "remaining_amount": None,
             "usage_rate": None, "status": "unbudgeted",
         }
+    usage_rate = spent_amount / budget_amount if budget_amount else (0 if spent_amount == 0 else 1)
     return {
         "budget_amount": budget_amount,
         "spent_amount": spent_amount,
         "remaining_amount": budget_amount - spent_amount,
-        "usage_rate": spent_amount / budget_amount if budget_amount else (0 if spent_amount == 0 else float("inf")),
+        "usage_rate": usage_rate,
         "status": budget_status(budget_amount, spent_amount),
     }
 

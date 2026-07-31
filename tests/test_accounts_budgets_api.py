@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -227,6 +228,35 @@ class AccountsBudgetsApiTest(unittest.TestCase):
             "id": "expense_dining", "name": "餐饮", "budget_amount": 100.0,
             "spent_amount": 100.0, "remaining_amount": 0.0, "usage_rate": 1.0, "status": "reached",
         }])
+
+    def test_zero_budget_with_spending_returns_strict_json_and_exceeded_status(self):
+        account = self.create_account(
+            name="零预算储值账户", type="stored_value", initial_balance=0,
+            budget_period="calendar_month", credit_limit=None, statement_day=None,
+            due_day=None,
+        )
+        self.assertEqual(self.request("POST", "/transactions", {
+            "account_id": account["id"], "timestamp": "2026-07-31", "amount": -446.86,
+            "description": "零预算消费", "category_id": "expense_dining_meal",
+            "transaction_kind": "expense", "excluded_from_stats": False,
+            "classification_status": "manual", "tag_ids": [],
+        }).status_code, 201)
+        for scope_type, scope_id in (("total", "total"), ("category", "expense_dining")):
+            self.assertEqual(self.request("POST", "/budgets", {
+                "scope_type": scope_type, "scope_id": scope_id, "amount": 0,
+                "effective_from": "2026-07-01",
+            }).status_code, 201)
+
+        response = self.request("GET", "/budget-summary?month=2026-07")
+        self.assertEqual(response.status_code, 200)
+        raw_body = response.get_data(as_text=True)
+        self.assertNotIn("Infinity", raw_body)
+        body = json.loads(raw_body, parse_constant=lambda value: self.fail(f"non-standard JSON number: {value}"))
+        self.assertEqual(body["total"]["usage_rate"], 1)
+        self.assertEqual(body["total"]["status"], "exceeded")
+        dining = next(row for row in body["categories"] if row["id"] == "expense_dining")
+        self.assertEqual(dining["usage_rate"], 1)
+        self.assertEqual(dining["status"], "exceeded")
 
     def test_budget_and_rule_reject_invalid_references_and_payloads(self):
         bad_budget = self.request(

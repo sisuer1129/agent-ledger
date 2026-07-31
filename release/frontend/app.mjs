@@ -132,6 +132,7 @@ export async function api(path, options = {}) {
     const detail = body?.error;
     throw new ApiError(response.status === 400 ? 'validation' : 'server', detail?.message || '服务暂时不可用', detail);
   }
+  if (!isCsv && body === null) throw new ApiError('server', '服务返回格式异常');
   return body;
 }
 

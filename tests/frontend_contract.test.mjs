@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260729-overview-balance1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260728-ledger-filter-layout1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260731-budget-json1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -52,6 +52,26 @@ test('ledger export URL always bypasses an older browser cache',()=>{
     app.buildExportPath({account_id:'card'}, 1721986000123),
     '/export.csv?account_id=card&_fresh=1721986000123',
   );
+});
+test('api rejects a successful response whose body is not valid JSON',async()=>{
+  const previousFetch=globalThis.fetch;
+  const previousLocalStorage=globalThis.localStorage;
+  globalThis.localStorage={getItem:(key)=>key==='apiKey'?'test-key':''};
+  globalThis.fetch=async()=>({
+    status:200,
+    ok:true,
+    headers:{get:()=> 'application/json'},
+    json:async()=>{throw new SyntaxError('Unexpected token');},
+  });
+  try {
+    await assert.rejects(
+      app.api('/budget-summary'),
+      (error)=>error.type==='server' && error.message==='服务返回格式异常',
+    );
+  } finally {
+    if(previousFetch===undefined) delete globalThis.fetch; else globalThis.fetch=previousFetch;
+    if(previousLocalStorage===undefined) delete globalThis.localStorage; else globalThis.localStorage=previousLocalStorage;
+  }
 });
 test('transaction form submits expenses as negative amounts',()=>{
   assert.equal(app.normalizeTransactionAmount(7,'expense'),-7);
