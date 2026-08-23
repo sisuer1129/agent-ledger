@@ -24,9 +24,11 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .eyebrow { margin: 0; }
 .workspace { display: grid; grid-template-columns: minmax(320px,.7fr) minmax(0,1.3fr); gap: 20px; margin-top: 28px; align-items: start; }
 .account-panel, .detail-panel { overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--sh-card); }
-.account-panel-head { padding: 20px; border-bottom: 1px solid var(--hairline); }
+.account-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid var(--hairline); }
 .account-panel-head .eyebrow { margin: 0 0 2px; font-size: 13px; }
 .account-panel-head h2, .detail-panel > .page-head h2 { margin: 0; }
+.account-add-button { min-height: 38px; padding: 0 12px; border: 1px solid rgba(0,113,227,.18); background: #eaf4ff; color: var(--accent); font-size: 13px; font-weight: 650; white-space: nowrap; }
+.account-add-button:hover { background: #e2f0ff; }
 .account-list { display: grid; }
 .account-group + .account-group { border-top: 1px solid var(--hairline); }
 .account-group h3 { margin: 0; padding: 14px 20px 8px; color: var(--text-3); font-size: 13px; font-weight: 650; letter-spacing: .02em; }
@@ -152,6 +154,8 @@ dialog header { display: flex; align-items: center; justify-content: space-betwe
 #transactionDialog .dialog-actions { position: sticky; bottom: 0; z-index: 2; margin: 0 -20px -20px; padding: 12px 20px 20px; border-top: 1px solid var(--hairline); background: var(--surface); }
 dialog label { display: grid; gap: 6px; color: var(--text-2); }
 [data-transaction-field][hidden] { display: none !important; }
+[data-account-create-field][hidden] { display: none !important; }
+.field-hint { color: var(--text-3); font-size: 12px; line-height: 1.45; }
 .transaction-mode { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 4px; border: 1px solid var(--hairline); border-radius: var(--r-chip); background: var(--ground); }
 .transaction-mode legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .transaction-mode label { display: grid; min-height: 44px; place-items: center; border-radius: calc(var(--r-chip) - 3px); color: var(--text-3); cursor: pointer; font-size: 13px; font-weight: 600; text-align: center; }
@@ -190,6 +194,9 @@ dialog label { display: grid; gap: 6px; color: var(--text-2); }
 @media (max-width: 560px) { .filter-main { grid-template-columns: 1fr; } }
 .mobile-account-detail { display: grid; gap: 12px; }
 .mobile-account-detail > button { justify-self: start; padding-left: 0; color: var(--accent); }
+.mobile-account-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 2px 2px 16px; }
+.mobile-account-head .eyebrow { font-size: 12px; }
+.mobile-account-head h1 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -.03em; }
 .mobile-account-group + .mobile-account-group { margin-top: 18px; }
 .mobile-account-group h2 { margin: 0 0 8px 4px; color: var(--text-3); font-size: 13px; font-weight: 650; letter-spacing: .02em; }
 .mobile-category-stats { display: grid; gap: 14px; }

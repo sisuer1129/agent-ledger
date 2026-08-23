@@ -70,6 +70,22 @@ export const prepareTransactionPayload = (data) => {
   if (!payload.category_id) delete payload.category_id;
   return payload;
 };
+export const accountSaveTarget = (id) => ({
+  path: id ? `/accounts/${encodeURIComponent(id)}` : '/accounts',
+  method: id ? 'PUT' : 'POST',
+});
+export const prepareAccountPayload = (data, creating) => {
+  const payload = { ...data };
+  ['monthly_budget', 'credit_limit'].forEach((field) => {
+    if (field in payload) payload[field] = payload[field] === '' ? null : Number(payload[field]);
+  });
+  ['statement_day', 'due_day', 'due_month_offset'].forEach((field) => {
+    if (field in payload) payload[field] = payload[field] === '' ? null : Number(payload[field]);
+  });
+  if (creating) payload.initial_balance = payload.initial_balance === '' ? 0 : Number(payload.initial_balance);
+  else delete payload.initial_balance;
+  return payload;
+};
 export const COMMON_CATEGORY_IDS = [
   'expense_dining_meal', 'expense_daily_shopping_groceries', 'expense_vehicle_charging_fuel',
   'expense_transport_temporary_parking', 'expense_digital_ai', 'expense_network_service',
@@ -588,9 +604,11 @@ async function renderMobile(tab, selectedMonth) {
   syncNavigationState(mobilePageForTab(tab));
   if (tab !== 'stats') mobileStatsRequestToken += 1;
   if (tab === 'home') {
-    target.innerHTML = groupAccountsForOverview(state.accounts).map((group) =>
+    const accountHead = '<header class="mobile-account-head"><div><p class="eyebrow">账户列表</p><h1>账户</h1></div><button class="account-add-button" data-open="accountDialog" type="button">添加账户</button></header>';
+    const accountGroups = groupAccountsForOverview(state.accounts).map((group) =>
       `<section class="mobile-account-group"><h2>${group.title}</h2><div class="unified-list">${group.accounts.map(rowAccount).join('')}</div></section>`
     ).join('') || renderState('list-state', '尚未添加账户', '添加账户后即可开始记录收支。');
+    target.innerHTML = accountHead + accountGroups;
   } else if (tab === 'ledger') {
     target.innerHTML = `<div class="unified-list">${renderState('loading-state', '正在加载明细')}</div>`;
     const rows = await api('/transactions?limit=50'); target.innerHTML = `<div class="unified-list">${rows.map((item) => transactionRow(item)).join('') || renderState('list-state', '暂无交易', '新增一笔交易后会显示在这里。')}</div>`;
@@ -644,7 +662,19 @@ async function openDialog(id, data = {}) {
   if (id === 'ruleDialog') refreshRuleTargets();
   if (id === 'accountDialog') {
     const account = data; const form = document.querySelector('#accountForm'); form.reset();
+    const creating = !account.id;
     Object.entries(account).forEach(([field, value]) => { if (form.elements[field] && value !== null && value !== undefined) form.elements[field].value = value; });
+    form.querySelector('#accountDialogTitle').textContent = creating ? '添加账户' : '账户设置';
+    form.querySelector('[data-account-create-field]').hidden = !creating;
+    const deactivateAccount = form.querySelector('#deactivateAccount');
+    deactivateAccount.hidden = creating;
+    form.querySelector('[data-account-save-label]').textContent = creating ? '添加' : '保存';
+    if (creating) {
+      form.elements.type.value = 'debit';
+      form.elements.budget_period.value = 'calendar_month';
+      form.elements.due_month_offset.value = '1';
+      form.elements.initial_balance.value = '0';
+    }
   }
   document.getElementById(id).showModal();
   if (id === 'transactionDialog') scheduleTransactionBudgetPreview();
@@ -783,7 +813,21 @@ function setup() {
     form.closest('dialog').close();
     await refreshAfterSave();
   }));
-  document.querySelector('#accountForm').addEventListener('submit', (event) => safe(async () => { event.preventDefault(); const form = event.currentTarget; const id = form.elements.id.value; const data = Object.fromEntries(new FormData(form)); delete data.id; ['monthly_budget', 'credit_limit'].forEach((field) => { data[field] = data[field] === '' ? null : Number(data[field]); }); ['statement_day', 'due_day', 'due_month_offset'].forEach((field) => { data[field] = data[field] === '' ? null : Number(data[field]); }); await api(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) }); form.closest('dialog').close(); await refreshAfterSave(); }));
+  document.querySelector('#accountForm').addEventListener('submit', (event) => safe(async () => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const id = form.elements.id.value;
+    const raw = Object.fromEntries(new FormData(form));
+    delete raw.id;
+    const target = accountSaveTarget(id);
+    const saved = await api(target.path, {
+      method: target.method,
+      body: JSON.stringify(prepareAccountPayload(raw, !id)),
+    });
+    if (!id) state.selectedAccountId = saved.id;
+    form.closest('dialog').close();
+    await refreshAfterSave();
+  }));
   document.querySelector('#budgetForm').addEventListener('submit', (event) => safe(async () => {
     event.preventDefault();
     const form = event.currentTarget;
