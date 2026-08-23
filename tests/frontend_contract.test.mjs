@@ -21,6 +21,25 @@ test('desktop overview uses aligned master-detail account cards',()=>{
   assert.match(css,/\.workspace\s*\{[^}]*grid-template-columns: minmax\(320px,\.7fr\) minmax\(0,1\.3fr\)/);
   assert.match(css,/@media \(max-width: 899px\) \{[^]*?\.workspace\s*\{\s*display: block/);
 });
+test('account creation is reachable on desktop and mobile',()=>{
+  assert.match(html,/class="account-panel-head"[^]*?data-open="accountDialog"[^]*?添加账户/);
+  assert.match(appSource,/class="mobile-account-head"[^]*?data-open="accountDialog"[^]*?添加账户/);
+  assert.match(html,/id="accountDialogTitle"/);
+  assert.match(html,/data-account-create-field[^>]*>初始余额<input name="initial_balance"/);
+  for(const token of ['accountDialogTitle','data-account-create-field','deactivateAccount.hidden','state.selectedAccountId = saved.id']) assert.ok(appSource.includes(token));
+});
+test('account save helpers distinguish create from edit',()=>{
+  assert.deepEqual(app.accountSaveTarget(''), { path: '/accounts', method: 'POST' });
+  assert.deepEqual(app.accountSaveTarget('card-1'), { path: '/accounts/card-1', method: 'PUT' });
+  assert.deepEqual(app.prepareAccountPayload({
+    name: '招行信用卡（副卡）', type: 'credit', initial_balance: '', monthly_budget: '',
+    credit_limit: '50000', statement_day: '12', due_day: '1', due_month_offset: '1',
+  }, true), {
+    name: '招行信用卡（副卡）', type: 'credit', initial_balance: 0, monthly_budget: null,
+    credit_limit: 50000, statement_day: 12, due_day: 1, due_month_offset: 1,
+  });
+  assert.equal('initial_balance' in app.prepareAccountPayload({ initial_balance: '-100' }, false), false);
+});
 test('ledger export is presented as a dedicated header action',()=>{
   assert.match(html,/<div class="page-head ledger-page-head"><h1>收支明细<\/h1><a id="exportLink" class="export-button"/);
   assert.doesNotMatch(html,/<form id="filterForm" class="filters">[^]*id="exportLink"/);
