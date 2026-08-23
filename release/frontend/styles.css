@@ -146,15 +146,19 @@ dialog [data-budget-object][hidden] { display: none; }
 input, select { min-height: 44px; padding: 0 10px; border: 1px solid var(--hairline); border-radius: var(--r-chip); background: #fff; }
 dialog { width: min(440px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: var(--r-sheet); box-shadow: var(--sh-panel); opacity: 0; transform: scale(.98) translateY(6px); transition: opacity 180ms var(--ease-spring), transform 180ms var(--ease-spring); }
 #transactionDialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
+#accountDialog { max-height: calc(100dvh - 32px); overflow-y: auto; }
 dialog[open] { opacity: 1; transform: scale(1) translateY(0); }
 dialog::backdrop { background: rgba(0,0,0,.26); backdrop-filter: blur(6px) saturate(180%); }
 dialog form { display: grid; gap: 12px; padding: 20px; }
 dialog header { display: flex; align-items: center; justify-content: space-between; }
 #transactionDialog form > header { position: sticky; top: 0; z-index: 2; padding-bottom: 8px; background: var(--surface); }
+#accountDialog form > header { position: sticky; top: 0; z-index: 2; padding-bottom: 8px; background: var(--surface); }
 #transactionDialog .dialog-actions { position: sticky; bottom: 0; z-index: 2; margin: 0 -20px -20px; padding: 12px 20px 20px; border-top: 1px solid var(--hairline); background: var(--surface); }
+#accountDialog .dialog-actions { position: sticky; bottom: 0; z-index: 2; margin: 0 -20px -20px; padding: 12px 20px 20px; border-top: 1px solid var(--hairline); background: var(--surface); }
 dialog label { display: grid; gap: 6px; color: var(--text-2); }
 [data-transaction-field][hidden] { display: none !important; }
 [data-account-create-field][hidden] { display: none !important; }
+#deactivateAccount[hidden] { display: none !important; }
 .field-hint { color: var(--text-3); font-size: 12px; line-height: 1.45; }
 .transaction-mode { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 0; padding: 4px; border: 1px solid var(--hairline); border-radius: var(--r-chip); background: var(--ground); }
 .transaction-mode legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

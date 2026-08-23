@@ -26,6 +26,7 @@ test('account creation is reachable on desktop and mobile',()=>{
   assert.match(appSource,/class="mobile-account-head"[^]*?data-open="accountDialog"[^]*?添加账户/);
   assert.match(html,/id="accountDialogTitle"/);
   assert.match(html,/data-account-create-field[^>]*>初始余额<input name="initial_balance"/);
+  assert.match(css,/#deactivateAccount\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
   for(const token of ['accountDialogTitle','data-account-create-field','deactivateAccount.hidden','state.selectedAccountId = saved.id']) assert.ok(appSource.includes(token));
 });
 test('account save helpers distinguish create from edit',()=>{
@@ -403,4 +404,10 @@ test('transaction dialog keeps its form actions reachable in a constrained mobil
   assert.match(css,/#transactionDialog \.dialog-actions\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
   assert.match(css,/@media \(max-width: 360px\) \{[^]*?\.transaction-mode\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css,/#transactionDialog \.category-picker\s*\{[^}]*max-height:/);
+});
+
+test('account dialog keeps create actions reachable in a constrained mobile viewport',()=>{
+  assert.match(css,/#accountDialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
+  assert.match(css,/#accountDialog form > header\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/);
+  assert.match(css,/#accountDialog \.dialog-actions\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
 });
