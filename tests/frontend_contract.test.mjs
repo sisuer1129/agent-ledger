@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260909-pagination1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-pagination1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260909-pagination1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-local-date1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -74,6 +74,18 @@ test('primary buttons keep a visible blue background on hover',()=>{
   assert.match(css,/button\.primary:hover\s*\{[^}]*background:\s*var\(--accent\)/);
 });
 test('frontend formatting and query helpers',()=>{assert.equal(app.formatMoney(126.1),'¥126.10');assert.equal(app.formatPeriod('2026-06-13','2026-07-12'),'2026/6/13—2026/7/12');assert.equal(app.buildQuery({account_id:'a 1',tag_id:'family_member_a'}).toString(),'account_id=a+1&tag_id=family_member_a');assert.equal(app.budgetState(79.9),'normal');assert.equal(app.budgetState(80),'warning');assert.equal(app.budgetState(100),'over')});
+test('local calendar date does not fall back to the previous UTC day at China midnight',()=>{
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'Asia/Shanghai';
+  try {
+    const afterMidnight = new Date('2026-08-31T16:30:00.000Z');
+    assert.equal(afterMidnight.toISOString().slice(0, 10), '2026-08-31');
+    assert.equal(app.localDateString(afterMidnight), '2026-09-01');
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  }
+});
 test('ledger export URL always bypasses an older browser cache',()=>{
   assert.equal(
     app.buildExportPath({account_id:'card'}, 1721986000123),

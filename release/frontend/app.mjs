@@ -12,6 +12,11 @@ export const formatMoney = (value) => new Intl.NumberFormat('zh-CN', {
 }).format(Number(value || 0));
 
 export const formatPeriod = (start, end) => `${compactDate(start)}—${compactDate(end)}`;
+export const localDateString = (date = new Date()) => [
+  date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, '0'),
+  String(date.getDate()).padStart(2, '0'),
+].join('-');
 export const buildQuery = (params) => {
   const query = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -135,7 +140,7 @@ class ApiError extends Error {
 const compactDate = (value) => value.replace(/-(\d{2})/g, '/$1').replace(/\/0/g, '/');
 const baseUrl = () => localStorage.getItem('apiUrl') || '';
 const apiKey = () => localStorage.getItem('apiKey') || '';
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDateString();
 let chartLibraryPromise;
 let expandedCategoryGroups = new Set();
 let budgetImpactTimer;
