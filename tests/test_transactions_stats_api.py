@@ -657,10 +657,21 @@ class WalletAnalyticsApiTest(unittest.TestCase):
             )
             self.assertTrue(created["id"])
 
-        exported = self.request("GET", "/export.csv?query=%E6%89%B9%E9%87%8F%E5%AF%BC%E5%87%BA")
+        self.add_transaction(account_id="cash", amount=-2000, description="批量导出 不匹配", tag_ids=[])
+        query = "query=%E6%89%B9%E9%87%8F%E5%AF%BC%E5%87%BA&min_amount=-1002&max_amount=-1"
+        exported = self.request("GET", "/export.csv?" + query)
         self.assertEqual(exported.status_code, 200)
         exported_rows = list(csv.reader(io.StringIO(exported.data.decode("utf-8-sig"))))
         self.assertEqual(len(exported_rows) - 1, 1002)
+        paginated = self.request("GET", "/transactions?paginated=1&limit=5000&" + query).json
+        self.assertEqual(len(paginated["transactions"]), 1000)
+        self.assertEqual(paginated["pagination"], {"total": 1002, "limit": 1000, "offset": 0,
+                                                  "has_more": True, "next_offset": 1000})
+        last = self.request("GET", "/transactions?paginated=1&offset=1000&" + query).json
+        self.assertEqual(len(last["transactions"]), 2)
+        self.assertFalse(last["pagination"]["has_more"])
+        self.assertCountEqual([row[0] for row in exported_rows[1:]],
+                              [row["id"] for row in paginated["transactions"] + last["transactions"]])
 
     def test_credit_card_repayment_api_creates_two_entries_and_excludes_them_from_overview(self):
         rejected_single_entry = self.request(
@@ -715,6 +726,84 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         )
         self.assertEqual(invalid.status_code, 400)
         self.assertEqual(invalid.get_json()["error"]["field"], "credit_account_id")
+
+    def test_amount_filters_match_csv_and_signed_boundaries(self):
+        saved = [self.add_transaction(amount=value, transaction_kind='expense' if value < 0 else 'income') for value in (-120, -30.5, 50, 200)]
+        for query, expected in [('min_amount=-40&max_amount=-30.5', [saved[1]['id']]), ('min_amount=50', [saved[2]['id'], saved[3]['id']]), ('max_amount=0', [saved[0]['id'], saved[1]['id']]), ('min_amount=&max_amount=', [row['id'] for row in saved])]:
+            with self.subTest(query=query):
+                response = self.request('GET', '/transactions?' + query)
+                self.assertEqual(response.status_code, 200)
+                self.assertCountEqual([row['id'] for row in response.json], expected)
+                exported = self.request('GET', '/export.csv?' + query)
+                self.assertEqual(exported.status_code, 200)
+                rows = list(csv.reader(io.StringIO(exported.data.decode('utf-8-sig'))))
+                self.assertCountEqual([row[0] for row in rows[1:]], expected)
+
+    def test_amount_filter_invalid_values_are_field_errors_for_both_endpoints(self):
+        for endpoint in ('/transactions', '/export.csv'):
+            for field in ('min_amount', 'max_amount'):
+                for value in ('abc', 'NaN', 'Infinity', '1e309'):
+                    with self.subTest(endpoint=endpoint, field=field, value=value):
+                        response = self.request('GET', f'{endpoint}?{field}={value}')
+                        self.assertEqual(response.status_code, 400)
+                        self.assertEqual(response.json['error']['field'], field)
+            response = self.request('GET', endpoint + '?min_amount=20&max_amount=10')
+            self.assertEqual(response.status_code, 400)
+
+    def test_paginated_metadata_and_legacy_shape(self):
+        ids = [self.add_transaction(amount=-amount)['id'] for amount in (10, 20, 30)]
+        legacy = self.request('GET', '/transactions').json
+        self.assertIsInstance(legacy, list)
+        first = self.request('GET', '/transactions?paginated=1&limit=1&min_amount=-30&max_amount=-20').json
+        self.assertEqual(first['pagination'], {'total': 2, 'limit': 1, 'offset': 0, 'has_more': True, 'next_offset': 1})
+        second = self.request('GET', '/transactions?paginated=1&limit=1&offset=1&min_amount=-30&max_amount=-20').json
+        self.assertEqual(second['pagination']['next_offset'], None)
+        self.assertFalse(second['pagination']['has_more'])
+        self.assertCountEqual([first['transactions'][0]['id'], second['transactions'][0]['id']], ids[1:])
+        empty = self.request('GET', '/transactions?paginated=1&offset=100').json
+        self.assertEqual(empty['transactions'], [])
+        self.assertEqual(empty['pagination']['total'], 3)
+        self.assertFalse(empty['pagination']['has_more'])
+        zero = self.request('GET', '/transactions?paginated=1&limit=0').json
+        self.assertEqual(zero['transactions'], [])
+        self.assertIsNone(zero['pagination']['next_offset'])
+        invalid = self.request('GET', '/transactions?paginated=1&limit=bad')
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_paginated_count_uses_all_list_filters(self):
+        match = self.add_transaction(description='独有备注', amount=-30)
+        self.add_transaction(description='其他备注', amount=-30)
+        self.add_transaction(description='独有备注', account_id='cash', amount=-30)
+        self.add_transaction(description='独有备注', amount=-30, tag_ids=[])
+        query = ('account_id=card&category_id=expense_dining_meal&tag_id=family_member_a'
+                 '&transaction_kind=expense&start=2026-07-01&end=2026-07-31'
+                 '&min_amount=-40&max_amount=-20&query=独有备注')
+        data = self.request('GET', '/transactions?paginated=1&' + query).json
+        self.assertEqual(data['pagination']['total'], 1)
+        self.assertEqual([row['id'] for row in data['transactions']], [match['id']])
+        rows = list(csv.reader(io.StringIO(self.request('GET', '/export.csv?' + query).data.decode('utf-8-sig'))))
+        self.assertEqual([row[0] for row in rows[1:]], [match['id']])
+
+    def test_insights_charts_cover_full_period_not_first_page(self):
+        for i in range(51):
+            self.add_transaction(amount=-2, timestamp='2026-07-12T12:00:00+08:00')
+        self.add_transaction(amount=-99, transaction_kind='transfer', excluded_from_stats=False)
+        self.add_transaction(amount=-99, excluded_from_stats=True)
+        self.add_transaction(amount=-99, timestamp='2026-08-12T12:00:00+08:00')
+        detail = self.request('GET', '/accounts/card/insights?mode=calendar_month&anchor=2026-07-12&transaction_limit=50').json
+        self.assertEqual(len(detail['transactions']), 50)
+        self.assertEqual(detail['transaction_pagination'], {'total': 53, 'limit': 50, 'offset': 0, 'has_more': True, 'next_offset': 50})
+        self.assertEqual(detail['chart_data']['daily_expenses'], [{'date': '2026-07-12', 'amount': 102.0}])
+        self.assertEqual(detail['chart_data']['category_expenses'], [{'category_id': 'expense_dining_meal', 'amount': 102.0}])
+        legacy = self.request('GET', '/accounts/card/insights?mode=calendar_month&anchor=2026-07-12').json
+        self.assertEqual(len(legacy['transactions']), 53)
+        self.assertEqual(legacy['transaction_pagination']['limit'], 100)
+        last = self.request('GET', '/accounts/card/insights?mode=calendar_month&anchor=2026-07-12&transaction_limit=50&transaction_offset=50').json
+        self.assertEqual(len(last['transactions']), 3)
+        self.assertFalse(last['transaction_pagination']['has_more'])
+        self.assertEqual(last['chart_data'], detail['chart_data'])
+        for query in ('transaction_limit=bad', 'transaction_offset=-1'):
+            self.assertEqual(self.request('GET', '/accounts/card/insights?' + query).status_code, 400)
 
 
 if __name__ == "__main__":

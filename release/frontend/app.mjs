@@ -1,9 +1,10 @@
-import { renderCharts } from './charts.mjs?v=20260726-category-colors1';
+import { createTransactionPager } from './pagination.mjs?v=20260909-pagination1';
+import { renderCharts } from './charts.mjs?v=20260909-pagination1';
 
 export const state = {
   accounts: [], taxonomy: null, budgets: [], budgetSummary: null, selectedAccountId: null,
   taxonomyPromise: null, periodMode: 'billing_cycle', periodAnchor: null, filters: {}, activePage: 'overview',
-  taxonomyMonth: null, mobileStatsMonth: null,
+  taxonomyMonth: null, mobileStatsMonth: null, mobileTab: 'home', mobileAccountId: null,
 };
 
 export const formatMoney = (value) => new Intl.NumberFormat('zh-CN', {
@@ -463,6 +464,7 @@ function populateFilterOptions() {
   form.querySelector('[name=account_id]').innerHTML = '<option value="">全部账户</option>' + state.accounts.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
   form.querySelector('[name=category_id]').innerHTML = '<option value="">全部分类</option>' + categoryOptions().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
   form.querySelector('[name=tag_id]').innerHTML = '<option value="">全部标签</option>' + (state.taxonomy?.tags || []).map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  Object.entries(state.filters).forEach(([name, value]) => { if (form.elements[name]) form.elements[name].value = value; });
 }
 
 async function ensureTaxonomy() {
@@ -514,15 +516,18 @@ async function refreshOverview() {
 }
 
 async function selectAccount(id, preserveMode = false) {
+  const requestToken = ++desktopAccountRequestToken;
+  transactionPagers['desktop-account']?.invalidate();
   const account = state.accounts.find((item) => item.id === id);
   if (!account) return;
   state.selectedAccountId = id;
   state.periodMode = accountPeriodMode(account, state.periodMode, preserveMode);
   renderAccountList();
   const [detail] = await Promise.all([
-    api(`/accounts/${encodeURIComponent(id)}/insights?${buildQuery({ mode: state.periodMode, anchor: state.periodAnchor || today() })}`),
+    api(`/accounts/${encodeURIComponent(id)}/insights?${buildQuery({ mode: state.periodMode, anchor: state.periodAnchor || today(), transaction_limit: 50 })}`),
     ensureTaxonomy(),
   ]);
+  if (requestToken !== desktopAccountRequestToken) return;
   const budget = account.monthly_budget || 0;
   const used = budget ? detail.expense / budget * 100 : 0;
   const forecast = budget && detail.period_start ? detail.expense / Math.max(1, new Date().getDate()) * 30 : null;
@@ -534,10 +539,11 @@ async function selectAccount(id, preserveMode = false) {
     <section class="detail-period-section"><p class="detail-section-label">周期控制</p><div class="detail-controls"><select id="periodMode">${modeOptions}</select><input id="periodAnchor" type="date" value="${state.periodAnchor || today()}"><button id="refreshInsights">查看</button></div></section>
     <section class="detail-summary-section"><p class="detail-section-label">指标摘要</p><p class="meta">${periodLabel}</p><div class="metrics"><strong>支出 ${formatMoney(detail.expense)}</strong>${budget ? `<span class="budget-${budgetState(used)}">预算 ${used.toFixed(0)}% · 剩余 ${formatMoney(Math.max(0, budget - detail.expense))}</span>` : ''}${forecast ? `<span>预计期末 ${formatMoney(forecast)}</span>` : ''}${detail.credit_limit !== undefined ? `<span>授信 ${formatMoney(detail.credit_limit)} · 已占用 ${formatMoney(detail.occupied_credit)} · 可用 ${formatMoney(detail.available_credit)}</span>` : ''}</div></section>
     <section class="detail-analysis-section"><p class="detail-section-label">图表分析</p><div class="charts"><section class="chartbox"><header class="chartbox-head"><h3>支出趋势</h3><p>${periodLabel}</p></header><canvas id="trendChart"></canvas><p id="trendEmpty" class="chart-empty" hidden>本期暂无支出趋势</p></section><section class="chartbox"><header class="chartbox-head"><h3>分类构成</h3><p>${periodLabel}</p></header><canvas id="categoryChart"></canvas><p id="categoryEmpty" class="chart-empty" hidden>本期暂无支出分类</p></section></div></section>
-    <section class="detail-transactions-section"><p class="detail-section-label">交易明细</p><div class="unified-list">${detail.transactions.map((item) => transactionRow(item)).join('') || renderState('list-state', '本期暂无交易', '记录一笔交易后会显示在这里。')}</div></section>`;
+    <section class="detail-transactions-section"><p class="detail-section-label">交易明细</p><div id="accountTransactions" class="unified-list"></div></section>`;
+  await seedAccountPager('desktop-account', '#accountTransactions', id, detail);
   document.querySelector('#periodMode').value = state.periodMode;
   await loadChartLibrary().catch(() => null);
-  renderCharts(detail, categoryPresentationMap());
+  if (requestToken === desktopAccountRequestToken) renderCharts(detail, categoryPresentationMap());
 }
 
 async function refreshBudgets() {
@@ -588,13 +594,38 @@ async function refreshTaxonomy(month = today().slice(0, 7)) {
   document.querySelector('#ruleRows').innerHTML = rules.map((rule) => `<div class="rule-row"><span>${escapeHtml(rule.pattern)}<br><span class="meta">${rule.rule_type} · 优先级 ${rule.priority}</span></span></div>`).join('') + `<div class="rule-row"><span>待整理队列<br><span class="meta">${needsReview.length} 笔待确认分类</span></span></div>`;
 }
 
-async function refreshLedger() {
-  const rows = await api(`/transactions?${buildQuery(state.filters)}`);
-  document.querySelector('#ledgerRows').innerHTML = rows.length
-    ? `${ledgerColumnHead()}${rows.map((item) => transactionRow(item)).join('')}`
-    : renderState('list-state', '暂无交易', '调整筛选条件或新增一笔交易。');
-  return rows;
+function pagedRowsMarkup(pager, key, desktop = false) {
+  const page = pager.state;
+  const rows = page.items.map(item => transactionRow(item)).join('');
+  const message = page.loading && !page.items.length ? renderState('loading-state', '正在加载明细')
+    : !rows && !page.error ? renderState('list-state', '暂无交易', '调整筛选条件或新增一笔交易。') : '';
+  const count = page.loading && !page.items.length ? '' : `<span>已显示 ${page.items.length} / ${page.total} 笔${!page.hasMore && page.total ? ' · 全部加载完成' : ''}</span>`;
+  return `${desktop && rows ? ledgerColumnHead() : ''}${rows}${message}<div class="list-pagination" aria-live="polite">${count}${page.error ? `<span class="pagination-error">${escapeHtml(page.error)}</span>` : ''}${page.hasMore ? `<button type="button" data-load-more="${key}"${page.loading ? ' disabled' : ''}>${page.loading ? '正在加载…' : page.error ? '重试' : '加载更多'}</button>` : ''}</div>`;
 }
+
+const transactionPagers = {};
+function pagerFor(key, selector, desktop = false) {
+  if (!transactionPagers[key]) transactionPagers[key] = createTransactionPager(async query => {
+    const page = await api(`/transactions?${buildQuery(query)}`);
+    return { items: page.transactions, ...page.pagination };
+  }, () => {
+    const target = document.querySelector(selector);
+    if (target) target.innerHTML = pagedRowsMarkup(transactionPagers[key], key, desktop);
+  });
+  return transactionPagers[key];
+}
+
+async function refreshLedger() {
+  return pagerFor('desktop-ledger', '#ledgerRows', true).reset(state.filters);
+}
+
+function seedAccountPager(key, selector, accountId, detail) {
+  return pagerFor(key, selector).reset({ account_id: accountId, start: detail.period_start, end: detail.period_end },
+    { items: detail.transactions, ...detail.transaction_pagination });
+}
+
+let desktopAccountRequestToken = 0;
+let mobileViewRequestToken = 0;
 
 function categoryRootIdMap() {
   const map = new Map();
@@ -613,6 +644,11 @@ function mobileCategoryBudgetMarkup(category, rows) {
 }
 
 async function renderMobile(tab, selectedMonth) {
+  mobileViewRequestToken += 1;
+  transactionPagers['mobile-ledger']?.invalidate();
+  transactionPagers['mobile-account']?.invalidate();
+  state.mobileTab = tab;
+  state.mobileAccountId = null;
   const target = document.querySelector('#mobileContent');
   syncNavigationState(mobilePageForTab(tab));
   if (tab !== 'stats') mobileStatsRequestToken += 1;
@@ -623,8 +659,8 @@ async function renderMobile(tab, selectedMonth) {
     ).join('') || renderState('list-state', '尚未添加账户', '添加账户后即可开始记录收支。');
     target.innerHTML = accountHead + accountGroups;
   } else if (tab === 'ledger') {
-    target.innerHTML = `<div class="unified-list">${renderState('loading-state', '正在加载明细')}</div>`;
-    const rows = await api('/transactions?limit=50'); target.innerHTML = `<div class="unified-list">${rows.map((item) => transactionRow(item)).join('') || renderState('list-state', '暂无交易', '新增一笔交易后会显示在这里。')}</div>`;
+    target.innerHTML = '<div id="mobileLedgerRows" class="unified-list"></div>';
+    await pagerFor('mobile-ledger', '#mobileLedgerRows').reset({});
   } else if (tab === 'stats') {
     const requestToken = ++mobileStatsRequestToken;
     const month = selectedMonth || state.mobileStatsMonth || today().slice(0, 7);
@@ -655,17 +691,24 @@ async function renderMobile(tab, selectedMonth) {
 }
 
 async function renderMobileAccountDetail(accountId) {
+  const requestToken = ++mobileViewRequestToken;
+  mobileStatsRequestToken += 1;
+  transactionPagers['mobile-ledger']?.invalidate();
+  transactionPagers['mobile-account']?.invalidate();
+  state.mobileAccountId = accountId;
   const account = state.accounts.find((item) => item.id === accountId);
   if (!account) return renderMobile('home');
   const mode = account.type === 'credit' && account.statement_day ? 'billing_cycle' : 'last_30_days';
-  const detail = await api(`/accounts/${encodeURIComponent(accountId)}/insights?${buildQuery({ mode, anchor: today() })}`);
+  const detail = await api(`/accounts/${encodeURIComponent(accountId)}/insights?${buildQuery({ mode, anchor: today(), transaction_limit: 50 })}`);
+  if (requestToken !== mobileViewRequestToken) return;
   document.querySelector('#mobileContent').innerHTML = `<section class="mobile-account-detail">
     <button type="button" data-mobile-account-back>‹ 返回账户</button>
     <h2>${escapeHtml(account.name)}</h2>
     <p class="meta">${formatPeriod(detail.period_start, detail.period_end)}</p>
     <div class="metrics"><strong>支出 ${formatMoney(detail.expense)}</strong>${detail.credit_limit !== undefined ? `<span>可用 ${formatMoney(detail.available_credit)}</span>` : ''}</div>
-    <div class="unified-list">${detail.transactions.map((item) => transactionRow(item)).join('') || renderState('list-state', '本期暂无交易', '记录一笔交易后会显示在这里。')}</div>
+    <div id="mobileAccountTransactions" class="unified-list"></div>
   </section>`;
+  await seedAccountPager('mobile-account', '#mobileAccountTransactions', accountId, detail);
 }
 
 async function openDialog(id, data = {}) {
@@ -701,7 +744,10 @@ async function refreshAfterSave() {
   if (state.activePage === 'budget') await refreshBudgets();
   if (state.activePage === 'taxonomy') await refreshTaxonomy();
   if (state.selectedAccountId) await selectAccount(state.selectedAccountId, true);
-  await renderMobile('home');
+  if (window.matchMedia('(max-width: 899px)').matches) {
+    if (state.mobileAccountId) await renderMobileAccountDetail(state.mobileAccountId);
+    else await renderMobile(state.mobileTab, state.mobileStatsMonth);
+  } else syncNavigationState(state.activePage);
 }
 
 async function load() {
@@ -730,6 +776,8 @@ function setup() {
   syncNavigationState('overview');
   window.addEventListener('scroll', () => document.querySelector('.topnav').classList.toggle('is-scrolled', window.scrollY > 0), { passive: true });
   document.addEventListener('click', (event) => {
+    const more = event.target.closest('[data-load-more]')?.dataset.loadMore;
+    if (more) safe(() => transactionPagers[more]?.loadMore());
     const page = event.target.closest('[data-page]')?.dataset.page;
     if (page) safe(() => showDesktopPage(page));
     const accountId = event.target.closest('[data-account]')?.dataset.account;

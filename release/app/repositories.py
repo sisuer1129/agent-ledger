@@ -351,6 +351,37 @@ def list_transactions(conn, filters=None):
     offset = _pagination_value(
         filters.get("offset", 0), default=0, maximum=SQLITE_INTEGER_MAX, clamp=False
     )
+    where, params = _transaction_where(filters)
+    rows = conn.execute(
+        "SELECT t.*, a.name AS account_name, c.name AS category_name, parent.name AS category_parent_name "
+        "FROM transactions t JOIN accounts a ON a.id = t.account_id "
+        "LEFT JOIN categories c ON c.id = t.category_id "
+        "LEFT JOIN categories parent ON parent.id = c.parent_id" + where + " "
+        "ORDER BY t.timestamp DESC, t.id ASC LIMIT ? OFFSET ?",
+        tuple(params) + (limit, offset),
+    ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["category_primary_name"] = row["category_parent_name"] or row["category_name"]
+        item["category_secondary_name"] = row["category_name"] if row["category_parent_name"] else None
+        tags = [
+            dict(tag)
+            for tag in conn.execute(
+                "SELECT tg.id, tg.name, tg.group_name FROM transaction_tags tt "
+                "JOIN tags tg ON tg.id = tt.tag_id WHERE tt.transaction_id = ? "
+                "ORDER BY tg.group_name ASC, tg.name ASC, tg.id ASC",
+                (row["id"],),
+            )
+        ]
+        item["tags"] = tags
+        item["tag_ids"] = [tag["id"] for tag in tags]
+        result.append(item)
+    return result
+
+
+def _transaction_where(filters):
+    """Shared signed-amount and reference filters for rows and counts."""
     clauses, params = [], []
     for key, column, operator in (
         ("start", "t.timestamp", ">="),
@@ -382,32 +413,25 @@ def list_transactions(conn, filters=None):
         params.extend(("%" + escaped + "%", "%" + escaped + "%"))
 
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
-    rows = conn.execute(
-        "SELECT t.*, a.name AS account_name, c.name AS category_name, parent.name AS category_parent_name "
-        "FROM transactions t JOIN accounts a ON a.id = t.account_id "
-        "LEFT JOIN categories c ON c.id = t.category_id "
-        "LEFT JOIN categories parent ON parent.id = c.parent_id" + where + " "
-        "ORDER BY t.timestamp DESC, t.id ASC LIMIT ? OFFSET ?",
-        tuple(params) + (limit, offset),
-    ).fetchall()
-    result = []
-    for row in rows:
-        item = dict(row)
-        item["category_primary_name"] = row["category_parent_name"] or row["category_name"]
-        item["category_secondary_name"] = row["category_name"] if row["category_parent_name"] else None
-        tags = [
-            dict(tag)
-            for tag in conn.execute(
-                "SELECT tg.id, tg.name, tg.group_name FROM transaction_tags tt "
-                "JOIN tags tg ON tg.id = tt.tag_id WHERE tt.transaction_id = ? "
-                "ORDER BY tg.group_name ASC, tg.name ASC, tg.id ASC",
-                (row["id"],),
-            )
-        ]
-        item["tags"] = tags
-        item["tag_ids"] = [tag["id"] for tag in tags]
-        result.append(item)
-    return result
+    return where, params
+
+
+def count_transactions(conn, filters=None):
+    filters = filters or {}
+    _require_mapping(filters)
+    where, params = _transaction_where(filters)
+    return conn.execute(
+        "SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id" + where,
+        tuple(params),
+    ).fetchone()[0]
+
+
+def transaction_pagination(filters, total):
+    limit = _pagination_value(filters.get("limit", 50), default=50, maximum=1000)
+    offset = _pagination_value(filters.get("offset", 0), default=0, maximum=SQLITE_INTEGER_MAX, clamp=False)
+    has_more = limit > 0 and offset + limit < total
+    return {"total": total, "limit": limit, "offset": offset, "has_more": has_more,
+            "next_offset": offset + limit if has_more else None}
 
 
 def _validate_create_payload(conn, payload):

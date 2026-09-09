@@ -28,6 +28,8 @@ from repositories import (
     deactivate_account,
     delete_transaction,
     list_transactions,
+    count_transactions,
+    transaction_pagination,
     update_transaction,
     update_account,
 )
@@ -266,6 +268,36 @@ def _parse_anchor(value):
         raise ApiValidationError("anchor", "anchor must be YYYY-MM-DD") from exc
 
 
+def _transaction_request_filters(pagination=False):
+    keys = ("start", "end", "account_id", "category_id", "tag_id", "transaction_kind",
+            "min_amount", "max_amount", "query")
+    if pagination:
+        keys += ("limit", "offset")
+    filters = {key: request.args.get(key) for key in keys if request.args.get(key) not in (None, "")}
+    for field in ("min_amount", "max_amount"):
+        if field in filters:
+            try:
+                value = float(filters[field])
+            except (ValueError, OverflowError) as exc:
+                raise ApiValidationError(field, field + " must be a finite number") from exc
+            filters[field] = _finite_number(value, field)
+    if "min_amount" in filters and "max_amount" in filters and filters["min_amount"] > filters["max_amount"]:
+        raise ApiValidationError("min_amount", "min_amount must not exceed max_amount")
+    return filters
+
+
+def _account_chart_data(conn, account_id, start, end):
+    clause = (" FROM transactions WHERE account_id = ? AND timestamp >= ? AND timestamp < ? "
+              "AND transaction_kind = 'expense' AND amount < 0 AND excluded_from_stats = 0 ")
+    params = (account_id, start.isoformat() + "T00:00:00+00:00", end.isoformat() + "T00:00:00+00:00")
+    daily = conn.execute("SELECT substr(timestamp, 1, 10) AS date, SUM(-amount) AS amount" + clause
+                         + "GROUP BY substr(timestamp, 1, 10) ORDER BY date", params).fetchall()
+    categories = conn.execute("SELECT category_id, SUM(-amount) AS amount" + clause
+                              + "GROUP BY category_id ORDER BY amount DESC, category_id", params).fetchall()
+    return {"daily_expenses": [dict(row) for row in daily],
+            "category_expenses": [dict(row) for row in categories]}
+
+
 def register_routes(app):
     @app.errorhandler(ApiValidationError)
     def handle_api_validation(exc):
@@ -486,11 +518,13 @@ def register_routes(app):
     @app.get("/transactions")
     @auth
     def transaction_list():
-        filters = {key: request.args.get(key) for key in (
-            "start", "end", "account_id", "category_id", "tag_id", "transaction_kind",
-            "min_amount", "max_amount", "query", "limit", "offset",
-        ) if request.args.get(key) is not None}
-        return jsonify(list_transactions(get_db(), filters))
+        filters = _transaction_request_filters(pagination=True)
+        conn = get_db()
+        rows = list_transactions(conn, filters)
+        if request.args.get("paginated") == "1":
+            return jsonify({"transactions": rows,
+                            "pagination": transaction_pagination(filters, count_transactions(conn, filters))})
+        return jsonify(rows)
 
     @app.post("/transactions")
     @auth
@@ -597,7 +631,13 @@ def register_routes(app):
             occupied = max(0.0, -current_balance)
             result.update({"credit_limit": float(account["credit_limit"]), "occupied_credit": occupied,
                            "available_credit": max(0.0, float(account["credit_limit"]) - occupied)})
-        result["transactions"] = list_transactions(conn, {"account_id": account_id, "start": start.isoformat(), "end": (end - timedelta(days=1)).isoformat(), "limit": 100})
+        filters = {"account_id": account_id, "start": start.isoformat(),
+                   "end": (end - timedelta(days=1)).isoformat(),
+                   "limit": request.args.get("transaction_limit", 100),
+                   "offset": request.args.get("transaction_offset", 0)}
+        result["transactions"] = list_transactions(conn, filters)
+        result["transaction_pagination"] = transaction_pagination(filters, count_transactions(conn, filters))
+        result["chart_data"] = _account_chart_data(conn, account_id, start, end)
         return jsonify(result)
 
     @app.get("/stats/categories")
@@ -632,10 +672,7 @@ def register_routes(app):
     @auth
     def export_csv():
         conn = get_db()
-        filters = {key: request.args.get(key) for key in (
-            "start", "end", "account_id", "category_id", "tag_id", "transaction_kind",
-            "query",
-        ) if request.args.get(key) is not None}
+        filters = _transaction_request_filters()
         rows, offset = [], 0
         while True:
             page = list_transactions(conn, filters | {"limit": 1000, "offset": offset})

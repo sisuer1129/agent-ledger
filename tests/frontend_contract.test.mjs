@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260823-account-create1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-account-period1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260909-pagination1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-pagination1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -255,7 +255,7 @@ test('category charts take configured presentation colours instead of a random p
   assert.doesNotMatch(await fs.promises.readFile(new URL('../release/frontend/charts.mjs',import.meta.url),'utf8'),/CATEGORY_CHART_COLORS|codePointAt|hsl\(/);
   assert.match(appSource,/function categoryPresentationMap\(\)/);
   assert.match(css,/--category-color/);
-  assert.match(appSource,/\.\/charts\.mjs\?v=20260726-category-colors1/);
+  assert.match(appSource,/\.\/charts\.mjs\?v=20260909-pagination1/);
 });
 test('taxonomy list uses configured root icons and colours',()=>{
   assert.match(appSource,/class="taxonomy-category"/);
@@ -425,4 +425,93 @@ test('account dialog keeps create actions reachable in a constrained mobile view
   assert.match(css,/#accountDialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
   assert.match(css,/#accountDialog form > header\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/);
   assert.match(css,/#accountDialog \.dialog-actions\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
+});
+
+test('paged transactions freeze filters, block duplicate requests and discard stale responses', async () => {
+  const { createTransactionPager } = await import('../release/frontend/pagination.mjs');
+  const requests = [];
+  const pager = createTransactionPager((query) => new Promise((resolve, reject) => requests.push({ query, resolve, reject })));
+  const filters = { query: '餐费' };
+  const first = pager.reset(filters);
+  filters.query = '其他';
+  assert.equal(requests[0].query.query, '餐费');
+  await pager.loadMore();
+  assert.equal(requests.length, 1);
+  const second = pager.reset({ query: '交通' });
+  requests[0].resolve({ items: [{ id: 'old' }], total: 1, next_offset: null, has_more: false });
+  await first;
+  assert.deepEqual(pager.state.items, []);
+  requests[1].resolve({ items: [{ id: 'a' }], total: 2, next_offset: 50, has_more: true });
+  await second;
+  const more = pager.loadMore();
+  assert.equal(requests[2].query.offset, 50);
+  assert.equal(requests[2].query.query, '交通');
+  requests[2].reject(new Error('网络故障'));
+  await more;
+  assert.deepEqual(pager.state.items.map(row => row.id), ['a']);
+  assert.equal(pager.state.nextOffset, 50);
+  const retry = pager.loadMore();
+  requests[3].resolve({ items: [{ id: 'b' }], total: 2, next_offset: null, has_more: false });
+  await retry;
+  assert.deepEqual(pager.state.items.map(row => row.id), ['a', 'b']);
+  assert.equal(pager.state.hasMore, false);
+  assert.equal(pager.state.error, '');
+});
+
+test('account first-page metadata seeds paging and invalidation prevents late updates', async () => {
+  const { createTransactionPager } = await import('../release/frontend/pagination.mjs');
+  let resolve;
+  const pager = createTransactionPager(() => new Promise(done => { resolve = done; }));
+  await pager.reset({ account_id: 'card', start: '2026-08-12', end: '2026-09-11' }, {
+    items: [{ id: 'a' }], total: 51, next_offset: 50, has_more: true,
+  });
+  assert.equal(pager.state.total, 51);
+  const request = pager.loadMore();
+  pager.invalidate();
+  resolve({ items: [{ id: 'b' }], total: 51, next_offset: null, has_more: false });
+  await request;
+  assert.deepEqual(pager.state.items.map(row => row.id), ['a']);
+});
+
+test('account charts use complete server aggregates independently of loaded transactions', () => {
+  const presentation = { food: { label: '餐饮', color: '#123456' }, _fallback: { label: '未分类', color: '#999999' } };
+  const detail = { transactions: [{ amount: -9999 }], chart_data: {
+    daily_expenses: [{ date: '2026-09-01', amount: 125 }, { date: '2026-09-02', amount: 75 }],
+    category_expenses: [{ category_id: 'food', amount: 150 }, { category_id: null, amount: 50 }],
+  } };
+  assert.deepEqual(charts.accountChartSeries(detail, presentation), {
+    trend: { labels: ['09-01', '09-02'], values: [125, 75] },
+    categories: { labels: ['餐饮', '未分类'], values: [150, 50], colors: ['#123456', '#999999'] },
+  });
+  detail.transactions.push({ amount: -5000 });
+  assert.deepEqual(charts.accountChartSeries(detail, presentation).trend.values, [125, 75]);
+});
+
+test('amount filters accept cents and explain signed expense values', () => {
+  for (const field of ['min_amount', 'max_amount']) assert.match(html, new RegExp(`name="${field}"[^>]*step="0.01"`));
+  assert.match(html, /id="amountFilterHint"[^>]*>支出请填负数，例如 -30.50/);
+  for (const field of ['min_amount', 'max_amount']) assert.match(html, new RegExp(`name="${field}"[^>]*aria-describedby="amountFilterHint"`));
+});
+
+test('pagination reads all 123 records and stops without an extra request, including empty results', async () => {
+  const { createTransactionPager } = await import('../release/frontend/pagination.mjs');
+  const rows = Array.from({ length: 123 }, (_, index) => ({ id: String(index) }));
+  const offsets = [];
+  const pager = createTransactionPager(async ({ offset, limit }) => {
+    offsets.push(offset);
+    return { items: rows.slice(offset, offset + limit), total: rows.length,
+      has_more: offset + limit < rows.length, next_offset: offset + limit < rows.length ? offset + limit : null };
+  });
+  await pager.reset({});
+  assert.equal(pager.state.items.length, 50);
+  await pager.loadMore();
+  assert.equal(pager.state.items.length, 100);
+  await pager.loadMore();
+  await pager.loadMore();
+  assert.deepEqual(offsets, [0, 50, 100]);
+  assert.deepEqual(pager.state.items, rows);
+  assert.equal(pager.state.total, 123);
+  await pager.reset({}, { items: [], total: 0, has_more: false, next_offset: null });
+  assert.equal(pager.state.items.length, 0);
+  assert.equal(pager.state.hasMore, false);
 });
