@@ -79,6 +79,14 @@ export const accountSaveTarget = (id) => ({
   path: id ? `/accounts/${encodeURIComponent(id)}` : '/accounts',
   method: id ? 'PUT' : 'POST',
 });
+export const accountPeriodMode = (account, currentMode, preserveMode = false) => {
+  const supportsBillingCycle = account.type === 'credit' && Boolean(account.statement_day);
+  const allowedModes = supportsBillingCycle
+    ? ['billing_cycle', 'last_30_days', 'calendar_month']
+    : ['last_30_days', 'calendar_month'];
+  if (preserveMode && allowedModes.includes(currentMode)) return currentMode;
+  return supportsBillingCycle ? 'billing_cycle' : 'last_30_days';
+};
 export const prepareAccountPayload = (data, creating) => {
   const payload = { ...data };
   ['monthly_budget', 'credit_limit'].forEach((field) => {
@@ -509,7 +517,7 @@ async function selectAccount(id, preserveMode = false) {
   const account = state.accounts.find((item) => item.id === id);
   if (!account) return;
   state.selectedAccountId = id;
-  if (!preserveMode) state.periodMode = account.type === 'credit' && account.statement_day ? 'billing_cycle' : 'last_30_days';
+  state.periodMode = accountPeriodMode(account, state.periodMode, preserveMode);
   renderAccountList();
   const [detail] = await Promise.all([
     api(`/accounts/${encodeURIComponent(id)}/insights?${buildQuery({ mode: state.periodMode, anchor: state.periodAnchor || today() })}`),

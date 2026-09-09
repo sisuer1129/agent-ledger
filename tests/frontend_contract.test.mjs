@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260823-account-create1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260823-account-create1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260823-account-create1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-account-period1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -40,6 +40,13 @@ test('account save helpers distinguish create from edit',()=>{
     credit_limit: 50000, statement_day: 12, due_day: 1, due_month_offset: 1,
   });
   assert.equal('initial_balance' in app.prepareAccountPayload({ initial_balance: '-100' }, false), false);
+});
+test('account selection drops a stale credit billing cycle for ordinary accounts',()=>{
+  const debit={type:'debit',statement_day:null};
+  const credit={type:'credit',statement_day:12};
+  assert.equal(app.accountPeriodMode(debit,'billing_cycle',true),'last_30_days');
+  assert.equal(app.accountPeriodMode(debit,'calendar_month',true),'calendar_month');
+  assert.equal(app.accountPeriodMode(credit,'billing_cycle',true),'billing_cycle');
 });
 test('ledger export is presented as a dedicated header action',()=>{
   assert.match(html,/<div class="page-head ledger-page-head"><h1>收支明细<\/h1><a id="exportLink" class="export-button"/);
