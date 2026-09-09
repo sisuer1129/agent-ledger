@@ -57,6 +57,34 @@ export const createSavedRefreshRunner = (report) => {
   };
   return run;
 };
+export const attemptSave = async (save, onError) => {
+  try {
+    return { ok: true, value: await save() };
+  } catch (error) {
+    onError(error);
+    return { ok: false };
+  }
+};
+const FORM_FIELD_LABELS = {
+  account_id: '账户', source_account_id: '付款账户', credit_account_id: '还款账户',
+  repayment_credit_account_id: '还款账户', amount: '金额', timestamp: '日期', description: '备注',
+  name: '名称', type: '账户类型', initial_balance: '初始余额', monthly_budget: '月度预算',
+  budget_period: '预算周期', credit_limit: '授信额度', statement_day: '账单日', due_day: '还款日',
+  due_month_offset: '还款月份', scope_type: '范围', scope_id: '对象', effective_from: '生效月份',
+  rule_type: '规则类型', pattern: '关键词', priority: '优先级', category_id: '分类', tag_id: '标签',
+  transaction_kind: '性质',
+};
+export const formatFormError = (error = {}) => {
+  if (error.type === 'network') return '无法连接账本服务，请检查网络后再试。';
+  if (error.type === 'authentication') return 'API Key 无效，请在设置中更新后再试。';
+  const message = typeof error.message === 'string' ? error.message.trim() : '';
+  if (error.type === 'validation') {
+    const label = FORM_FIELD_LABELS[error.detail?.field];
+    if (label) return `${label}填写有误：${message || '请检查后再试'}`;
+    return message ? `提交内容有误：${message}` : '提交内容有误，请检查后再试。';
+  }
+  return message ? `保存失败：${message}` : '保存失败，请稍后再试。';
+};
 export const budgetState = (percent) => (percent >= 100 ? 'over' : percent >= 80 ? 'warning' : 'normal');
 export const monthlyBalance = ({ income = 0, expense = 0, refunds = 0 } = {}) => (
   Number(income || 0) - Number(expense || 0) + Number(refunds || 0)
@@ -217,6 +245,30 @@ function showStatus(message, retry) {
   node.style.display = message ? 'block' : 'none';
 }
 
+function clearFormError(form) {
+  const node = form?.querySelector('[data-form-error]');
+  if (!node) return;
+  node.textContent = '';
+  node.hidden = true;
+}
+
+function showFormError(form, message, dialogSession) {
+  const dialog = form.closest('dialog');
+  if (!(dialog?.open && dialog._formSession === dialogSession)) return false;
+  const node = form.querySelector('[data-form-error]');
+  if (!node) return false;
+  node.textContent = message;
+  node.hidden = false;
+  const focusError = () => {
+    if (!(dialog?.open && dialog._formSession === dialogSession) || node.hidden) return;
+    node.focus({ preventScroll: true });
+    node.scrollIntoView({ block: 'center', behavior: 'auto' });
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(focusError);
+  else focusError();
+  return true;
+}
+
 function safe(task) {
   return Promise.resolve(task()).catch((error) => showStatus(error.message, () => safe(task)));
 }
@@ -248,16 +300,21 @@ const refreshSavedView = createSavedRefreshRunner((error, retry) => {
 });
 
 function saveForm(form, { save, onSaved, refresh }) {
+  const dialog = form.closest('dialog');
+  const dialogSession = dialog?._formSession;
   return submitFormOnce(form, async () => {
-    let saved;
-    try {
-      saved = await save();
-    } catch (error) {
-      showStatus(error.message);
-      return;
-    }
+    clearFormError(form);
+    const result = await attemptSave(save, (error) => {
+      const message = formatFormError(error);
+      if (!showFormError(form, message, dialogSession)) showStatus(message);
+    });
+    if (!result.ok) return;
+    const saved = result.value;
     if (onSaved) onSaved(saved);
-    form.closest('dialog').close();
+    if (dialog?.open && dialog._formSession === dialogSession) {
+      clearFormError(form);
+      dialog.close();
+    }
     await refreshSavedView(refresh);
   });
 }
@@ -786,6 +843,9 @@ async function renderMobileAccountDetail(accountId) {
 }
 
 async function openDialog(id, data = {}) {
+  const dialog = document.getElementById(id);
+  dialog._formSession = (dialog._formSession || 0) + 1;
+  clearFormError(dialog.querySelector('form'));
   if (['transactionDialog', 'budgetDialog', 'ruleDialog'].includes(id)) await ensureTaxonomy();
   if (id === 'transactionDialog') populateTransactionForm(data);
   if (id === 'budgetDialog') populateBudgetForm(data);
@@ -806,7 +866,7 @@ async function openDialog(id, data = {}) {
       form.elements.initial_balance.value = '0';
     }
   }
-  document.getElementById(id).showModal();
+  dialog.showModal();
   if (id === 'transactionDialog') scheduleTransactionBudgetPreview();
 }
 

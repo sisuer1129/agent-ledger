@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260909-pagination1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-local-date1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260909-form-errors1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-form-errors1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -124,6 +124,22 @@ test('saved-view retry repeats only the failed refresh task',async()=>{
   assert.equal(await retry(),true);
   assert.equal(attempts,2);
   assert.deepEqual(reports,['refresh failed','clear']);
+});
+test('save attempts report synchronous and asynchronous failures without continuing',async()=>{
+  const failures=[];
+  assert.deepEqual(await app.attemptSave(()=>{throw new Error('sync');},error=>failures.push(error.message)),{ok:false});
+  assert.deepEqual(await app.attemptSave(async()=>{throw new Error('async');},error=>failures.push(error.message)),{ok:false});
+  assert.deepEqual(await app.attemptSave(async()=>({id:'saved'}),error=>failures.push(error.message)),{
+    ok:true,value:{id:'saved'},
+  });
+  assert.deepEqual(failures,['sync','async']);
+});
+test('form errors use safe user-facing messages',()=>{
+  assert.equal(app.formatFormError({type:'network'}),'无法连接账本服务，请检查网络后再试。');
+  assert.equal(app.formatFormError({type:'authentication'}),'API Key 无效，请在设置中更新后再试。');
+  assert.equal(app.formatFormError({type:'validation',message:'name is required',detail:{field:'name'}}),'名称填写有误：name is required');
+  assert.equal(app.formatFormError({type:'server',message:'account name already exists',detail:{field:'name'}}),'保存失败：account name already exists');
+  assert.equal(app.formatFormError({}),'保存失败，请稍后再试。');
 });
 test('ledger export URL always bypasses an older browser cache',()=>{
   assert.equal(
@@ -325,6 +341,27 @@ test('all write forms lock synchronously and retry only their post-save refresh'
   assert.doesNotMatch(appSource,/showStatus\(`已保存[^`]*`, \(\) => safe\(/);
   assert.doesNotMatch(appSource,/event\.currentTarget\.closest\('dialog'\)\.close\(\)/);
 });
+test('save failures stay inside the active dialog and stale failures do not steal focus',()=>{
+  const forms = [
+    ['transactionDialog','transactionDialogTitle','transactionForm','transactionFormError'],
+    ['accountDialog','accountDialogTitle','accountForm','accountFormError'],
+    ['budgetDialog','budgetDialogTitle','budgetForm','budgetFormError'],
+    ['ruleDialog','ruleDialogTitle','ruleForm','ruleFormError'],
+  ];
+  for (const [dialogId,titleId,formId,errorId] of forms) {
+    assert.match(html,new RegExp(`<dialog id="${dialogId}" aria-labelledby="${titleId}">[\\s\\S]*?<h2 id="${titleId}"[\\s\\S]*?<form id="${formId}"|<dialog id="${dialogId}" aria-labelledby="${titleId}"><form id="${formId}"><header><h2 id="${titleId}"`));
+    const form = html.match(new RegExp(`<form id="${formId}">([\\s\\S]*?)</form>`))?.[1] || '';
+    assert.match(form,new RegExp(`<p id="${errorId}" class="form-error" data-form-error role="status" aria-atomic="true" tabindex="-1" hidden></p>`));
+  }
+  assert.match(css,/\.form-error\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css,/\.form-error\[hidden\]\s*\{[^}]*display:\s*none/);
+  assert.match(css,/dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
+  assert.match(appSource,/function clearFormError\(form\)/);
+  assert.match(appSource,/function showFormError\(form, message, dialogSession\)/);
+  assert.match(appSource,/dialog\?\.open && dialog\._formSession === dialogSession/);
+  assert.match(appSource,/const result = await attemptSave\(save, \(error\) =>/);
+  assert.doesNotMatch(appSource,/catch \(error\) \{\s*showStatus\(error\.message\);\s*return;\s*\}/);
+});
 test('budget page is driven by the shared monthly summary and supports editing total and root budgets',()=>{
   assert.match(html,/id="budgetSummary"/);
   assert.match(html,/name="scope_type"><option value="total">本月总预算<\/option><option value="category">一级分类<\/option><option value="account">账户（兼容旧设置）<\/option>/);
@@ -471,14 +508,14 @@ test('mobile global status clears the fixed bottom navigation and safe area',()=
 });
 
 test('transaction dialog keeps its form actions reachable in a constrained mobile viewport',()=>{
-  assert.match(css,/#transactionDialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
+  assert.match(css,/dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
   assert.match(css,/#transactionDialog \.dialog-actions\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
   assert.match(css,/@media \(max-width: 360px\) \{[^]*?\.transaction-mode\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
   assert.match(css,/#transactionDialog \.category-picker\s*\{[^}]*max-height:/);
 });
 
 test('account dialog keeps create actions reachable in a constrained mobile viewport',()=>{
-  assert.match(css,/#accountDialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
+  assert.match(css,/dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow-y:\s*auto/);
   assert.match(css,/#accountDialog form > header\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/);
   assert.match(css,/#accountDialog \.dialog-actions\s*\{[^}]*position:\s*sticky[^}]*bottom:\s*0/);
 });
