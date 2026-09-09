@@ -24,6 +24,7 @@ from repositories import (
     _validate_account_values,
     create_credit_card_repayment,
     create_transaction,
+    delete_credit_card_repayment,
     deactivate_account,
     delete_transaction,
     list_transactions,
@@ -509,6 +510,8 @@ def register_routes(app):
             data.setdefault("category_id", classification.category_id)
             data.setdefault("classification_status", classification.classification_status)
             data.setdefault("tag_ids", list(classification.tag_ids))
+        if data.get("transaction_kind") == "credit_repayment":
+            return _invalid("transaction_kind", "use /credit-card-repayments for credit card repayments")
         return jsonify(create_transaction(get_db(), data)), 201
 
     @app.post("/credit-card-repayments")
@@ -520,6 +523,12 @@ def register_routes(app):
         elif isinstance(data["timestamp"], str) and len(data["timestamp"]) == 10:
             data["timestamp"] += "T12:00:00+00:00"
         return jsonify(create_credit_card_repayment(get_db(), data)), 201
+
+    @app.delete("/credit-card-repayments/<repayment_group_id>")
+    @auth
+    def credit_card_repayment_delete(repayment_group_id):
+        delete_credit_card_repayment(get_db(), repayment_group_id)
+        return jsonify({"status": "reversed"})
 
     @app.put("/transactions/<transaction_id>")
     @auth
@@ -541,8 +550,17 @@ def register_routes(app):
         start, end = _month_bounds(request.args.get("year", date.today().year), request.args.get("month", date.today().month))
         values = _stats_for_period(get_db(), start, end)
         accounts = get_db().execute("SELECT type, current_balance FROM accounts WHERE is_active = 1").fetchall()
-        assets = sum(float(row["current_balance"] or 0) for row in accounts if row["type"] != "credit")
-        liabilities = sum(abs(float(row["current_balance"] or 0)) for row in accounts if row["type"] == "credit")
+        assets = sum(
+            float(row["current_balance"] or 0)
+            for row in accounts if row["type"] != "credit"
+        ) + sum(
+            max(0.0, float(row["current_balance"] or 0))
+            for row in accounts if row["type"] == "credit"
+        )
+        liabilities = sum(
+            max(0.0, -float(row["current_balance"] or 0))
+            for row in accounts if row["type"] == "credit"
+        )
         values.update({"period_start": start.isoformat(), "period_end": (end - timedelta(days=1)).isoformat(),
                        "assets": assets, "liabilities": liabilities, "net_assets": assets - liabilities})
         return jsonify(values)
@@ -613,8 +631,18 @@ def register_routes(app):
     @app.get("/export.csv")
     @auth
     def export_csv():
-        rows = list_transactions(get_db(), {key: request.args.get(key) for key in ("start", "end", "account_id", "category_id", "tag_id", "transaction_kind", "query") if request.args.get(key) is not None} | {"limit": 1000})
         conn = get_db()
+        filters = {key: request.args.get(key) for key in (
+            "start", "end", "account_id", "category_id", "tag_id", "transaction_kind",
+            "query",
+        ) if request.args.get(key) is not None}
+        rows, offset = [], 0
+        while True:
+            page = list_transactions(conn, filters | {"limit": 1000, "offset": offset})
+            rows.extend(page)
+            if len(page) < 1000:
+                break
+            offset += len(page)
         output = StringIO(newline="")
         writer = csv.writer(output)
         writer.writerow(["交易 ID", "时间", "账户", "金额", "类型", "一级分类", "二级分类", "标签", "交易性质", "是否计入统计", "备注"])

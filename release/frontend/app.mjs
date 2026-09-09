@@ -27,8 +27,13 @@ export const budgetState = (percent) => (percent >= 100 ? 'over' : percent >= 80
 export const monthlyBalance = ({ income = 0, expense = 0, refunds = 0 } = {}) => (
   Number(income || 0) - Number(expense || 0) + Number(refunds || 0)
 );
-export const normalizeTransactionAmount = (value, kind) => {
+export const transactionEditMode = (kind) => (
+  ['expense', 'income', 'refund', 'transfer', 'topup_withdrawal', 'balance_adjustment'].includes(kind)
+    ? kind : 'expense'
+);
+export const normalizeTransactionAmount = (value, kind, originalAmount) => {
   const amount = Math.abs(Number(value || 0));
+  if (['transfer', 'topup_withdrawal', 'balance_adjustment'].includes(kind) && originalAmount < 0) return -amount;
   return kind === 'expense' ? -amount : amount;
 };
 export const formatTransactionCategory = ({ category_primary_name, category_secondary_name }) => (
@@ -240,7 +245,7 @@ function transactionRow(transaction, editable = true) {
   return `<div class="ledger-row transaction-row"><span class="transaction-main"><strong>${escapeHtml(transaction.description)}</strong><br><span class="meta">${details.map(escapeHtml).join(' · ')}<span class="transaction-mobile-category">${mobileCategory}</span></span></span>
     ${categoryTag}
     <span class="amount ${transaction.amount < 0 ? 'negative' : ''}">${formatMoney(transaction.amount)}</span>
-    ${editable && transaction.transaction_kind !== 'credit_repayment' ? `<button data-edit-transaction="${transaction.id}" aria-label="编辑交易">编辑</button>` : '<span class="ledger-action-placeholder">—</span>'}</div>`;
+    ${editable && transaction.transaction_kind !== 'credit_repayment' ? `<button data-edit-transaction="${transaction.id}" aria-label="编辑交易">编辑</button>` : transaction.repayment_group_id ? `<button data-reverse-repayment="${escapeHtml(transaction.repayment_group_id)}" aria-label="撤销还款">撤销还款</button>` : '<span class="ledger-action-placeholder">—</span>'}</div>`;
 }
 
 function ledgerColumnHead() {
@@ -257,6 +262,7 @@ function populateTransactionForm(transaction = {}) {
   const form = document.querySelector('#transactionForm');
   form.dataset.transactionId = transaction.id || '';
   form._budgetPreviewOriginal = transaction;
+  form._originalTransaction = transaction;
   form.querySelector('#deleteTransaction').hidden = !transaction.id || transaction.transaction_kind === 'credit_repayment';
   form.querySelector('[name=account_id]').innerHTML = state.accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
   form.querySelector('[name=repayment_credit_account_id]').innerHTML = state.accounts
@@ -268,8 +274,7 @@ function populateTransactionForm(transaction = {}) {
   for (const name of ['account_id', 'category_id', 'transaction_kind', 'description']) if (transaction[name]) form.querySelector(`[name=${name}]`).value = transaction[name];
   form.querySelector('[name=amount]').value = transaction.amount === undefined ? '' : Math.abs(transaction.amount);
   [...form.querySelector('[name=tag_ids]').options].forEach((option) => { option.selected = (transaction.tag_ids || []).includes(option.value); });
-  const mode = ['expense', 'income', 'refund'].includes(transaction.transaction_kind)
-    ? transaction.transaction_kind : 'expense';
+  const mode = transactionEditMode(transaction.transaction_kind);
   form.querySelector(`[name=transaction_mode][value=${mode}]`).checked = true;
   setTransactionFormMode(mode);
   renderCategoryPicker();
@@ -729,6 +734,12 @@ function setup() {
       if (!transaction) throw new Error('未找到这条交易，请刷新页面后重试');
       await openDialog('transactionDialog', transaction);
     });
+    const repaymentGroupId = event.target.closest('[data-reverse-repayment]')?.dataset.reverseRepayment;
+    if (repaymentGroupId) safe(async () => {
+      if (!confirm('确定撤销这笔信用卡还款吗？两个账户的余额都会恢复。')) return;
+      await api(`/credit-card-repayments/${encodeURIComponent(repaymentGroupId)}`, { method: 'DELETE' });
+      await refreshAfterSave();
+    });
     const dialog = event.target.closest('[data-open]')?.dataset.open; if (dialog) safe(() => openDialog(dialog));
     const editBudget = event.target.closest('[data-edit-budget]')?.dataset.editBudget;
     if (editBudget) safe(() => {
@@ -794,7 +805,11 @@ function setup() {
       delete data.repayment_credit_account_id;
       data.transaction_kind = mode;
       const payload = prepareTransactionPayload(data);
-      payload.amount = normalizeTransactionAmount(payload.amount, payload.transaction_kind);
+      payload.amount = normalizeTransactionAmount(
+        payload.amount, payload.transaction_kind,
+        form._originalTransaction?.transaction_kind === payload.transaction_kind
+          ? form._originalTransaction.amount : undefined,
+      );
       payload.tag_ids = [...form.querySelector('[name=tag_ids]').selectedOptions].map((option) => option.value);
       const id = form.dataset.transactionId;
       await api(id ? `/transactions/${id}` : '/transactions', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });

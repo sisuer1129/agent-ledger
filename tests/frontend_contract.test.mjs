@@ -99,6 +99,14 @@ test('transaction form submits expenses as negative amounts',()=>{
   assert.equal(app.normalizeTransactionAmount(-7,'income'),7);
   assert.equal(app.normalizeTransactionAmount(7,'refund'),7);
 });
+test('editing a special transaction preserves its type and original sign',()=>{
+  assert.equal(app.transactionEditMode('transfer'), 'transfer');
+  assert.equal(app.normalizeTransactionAmount(100, 'transfer', -100), -100);
+  assert.equal(app.normalizeTransactionAmount(100, 'balance_adjustment', 100), 100);
+  assert.match(html,/value="transfer"/);
+  assert.match(html,/value="topup_withdrawal"/);
+  assert.match(html,/value="balance_adjustment"/);
+});
 test('ledger rows expose complete category labels and repayment fields respect hidden state',()=>{
   assert.equal(app.formatTransactionCategory({
     category_primary_name:'日用购物', category_secondary_name:'食品杂货',

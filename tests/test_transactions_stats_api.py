@@ -21,6 +21,7 @@ from repositories import (
     ValidationError,
     _atomic,
     create_credit_card_repayment,
+    delete_credit_card_repayment,
     create_transaction,
     deactivate_account,
     delete_transaction,
@@ -213,6 +214,29 @@ class TransactionRepositoryTest(unittest.TestCase):
         self.assertEqual(self.tags("tx-delete"), set())
         with self.assertRaises(NotFoundError):
             delete_transaction(self.conn, "missing")
+
+    def test_credit_card_repayment_can_only_be_reversed_as_a_pair(self):
+        repayment = create_credit_card_repayment(
+            self.conn,
+            {
+                "source_account_id": "cash", "credit_account_id": "card", "amount": 50,
+                "timestamp": "2026-07-25T12:00:00+00:00",
+            },
+        )
+        group_id = repayment["source_transaction"]["repayment_group_id"]
+        self.assertEqual(repayment["source_transaction"]["repayment_group_id"], group_id)
+        self.assertEqual(repayment["credit_transaction"]["repayment_group_id"], group_id)
+        with self.assertRaisesRegex(ValidationError, "reversed as a group"):
+            delete_transaction(self.conn, repayment["source_transaction"]["id"])
+        with self.assertRaisesRegex(ValidationError, "reversed as a group"):
+            update_transaction(self.conn, repayment["credit_transaction"]["id"], {"description": "错误修改"})
+        self.assertEqual((self.balance("cash"), self.balance("card")), (950.0, -150.0))
+
+        delete_credit_card_repayment(self.conn, group_id)
+
+        self.assertEqual((self.balance("cash"), self.balance("card")), (1000.0, -200.0))
+        self.assertIsNone(self.transaction(repayment["source_transaction"]["id"]))
+        self.assertIsNone(self.transaction(repayment["credit_transaction"]["id"]))
 
     def test_sql_failure_during_delete_restores_balance_transaction_and_tags(self):
         create_transaction(self.conn, self.payload(id="tx-delete-failure"))
@@ -580,10 +604,11 @@ class WalletAnalyticsApiTest(unittest.TestCase):
 
     def test_filters_overview_insights_stats_and_csv_exclude_repayment(self):
         purchase = self.add_transaction()
-        self.add_transaction(
-            account_id="cash", amount=-120, description="还款至示例信用卡B", category_id=None,
-            transaction_kind="credit_repayment", excluded_from_stats=True, tag_ids=[],
-        )
+        repayment = self.request("POST", "/credit-card-repayments", {
+            "source_account_id": "cash", "credit_account_id": "card", "amount": 120,
+            "timestamp": "2026-07-25",
+        })
+        self.assertEqual(repayment.status_code, 201, repayment.get_json())
         transactions = self.request("GET", "/transactions?account_id=card&tag_id=family_member_a&query=%E7%A4%BA%E4%BE%8B%E4%BA%A4%E9%80%9A")
         self.assertEqual(transactions.status_code, 200)
         self.assertEqual([row["id"] for row in transactions.get_json()], [purchase["id"]])
@@ -595,7 +620,7 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         self.assertEqual(insights.status_code, 200)
         self.assertEqual(insights.get_json()["period_start"], "2026-06-13")
         self.assertEqual(insights.get_json()["expense"], 120.0)
-        self.assertEqual(insights.get_json()["available_credit"], 9880.0)
+        self.assertEqual(insights.get_json()["available_credit"], 10000.0)
         categories = self.request("GET", "/stats/categories?year=2026&month=7")
         self.assertEqual(categories.status_code, 200)
         self.assertEqual(categories.get_json()[0]["id"], "expense_dining_meal")
@@ -611,7 +636,45 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         self.assertEqual(exported_rows[0][0], "交易 ID")
         self.assertIn(purchase["id"], [row[0] for row in exported_rows[1:]])
 
+    def test_overview_treats_credit_card_overpayment_as_an_asset(self):
+        response = self.request("POST", "/accounts", {
+            "name": "溢缴信用卡", "type": "credit", "initial_balance": 100,
+        })
+        self.assertEqual(response.status_code, 201, response.get_json())
+
+        overview = self.request("GET", "/overview?year=2026&month=7")
+
+        self.assertEqual(overview.status_code, 200)
+        self.assertEqual(overview.get_json()["assets"], 100.0)
+        self.assertEqual(overview.get_json()["liabilities"], 0.0)
+        self.assertEqual(overview.get_json()["net_assets"], 100.0)
+
+    def test_export_includes_all_matching_rows_beyond_a_page(self):
+        for index in range(1002):
+            created = self.add_transaction(
+                account_id="cash", amount=-index - 1, description=f"批量导出 {index}",
+                category_id="expense_dining_meal", tag_ids=[],
+            )
+            self.assertTrue(created["id"])
+
+        exported = self.request("GET", "/export.csv?query=%E6%89%B9%E9%87%8F%E5%AF%BC%E5%87%BA")
+        self.assertEqual(exported.status_code, 200)
+        exported_rows = list(csv.reader(io.StringIO(exported.data.decode("utf-8-sig"))))
+        self.assertEqual(len(exported_rows) - 1, 1002)
+
     def test_credit_card_repayment_api_creates_two_entries_and_excludes_them_from_overview(self):
+        rejected_single_entry = self.request(
+            "POST",
+            "/transactions",
+            {
+                "account_id": "cash", "timestamp": "2026-07-25", "amount": -120,
+                "description": "还款至示例信用卡B", "transaction_kind": "credit_repayment",
+                "excluded_from_stats": True, "tag_ids": [],
+            },
+        )
+        self.assertEqual(rejected_single_entry.status_code, 400, rejected_single_entry.get_json())
+        self.assertEqual(rejected_single_entry.get_json()["error"]["field"], "transaction_kind")
+
         response = self.request(
             "POST",
             "/credit-card-repayments",
@@ -630,6 +693,15 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         self.assertEqual(body["source_transaction"]["timestamp"], "2026-07-25T12:00:00+00:00")
         overview = self.request("GET", "/overview?year=2026&month=7")
         self.assertEqual(overview.get_json()["expense"], 0.0)
+
+        blocked = self.request("DELETE", f"/transactions/{body['source_transaction']['id']}")
+        self.assertEqual(blocked.status_code, 400, blocked.get_json())
+        self.assertIn("reversed as a group", blocked.get_json()["error"]["message"])
+        reversed_response = self.request(
+            "DELETE", f"/credit-card-repayments/{body['source_transaction']['repayment_group_id']}"
+        )
+        self.assertEqual(reversed_response.status_code, 200, reversed_response.get_json())
+        self.assertEqual(reversed_response.get_json(), {"status": "reversed"})
 
         invalid = self.request(
             "POST",

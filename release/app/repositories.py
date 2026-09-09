@@ -147,6 +147,7 @@ def create_credit_card_repayment(conn, payload):
 
         source_description = data["description"] or ("还款至" + credit_account["name"])
         credit_description = data["description"] or (source_account["name"] + "信用卡还款")
+        repayment_group_id = str(uuid4())
         source_transaction = create_transaction(
             conn,
             {
@@ -175,6 +176,12 @@ def create_credit_card_repayment(conn, payload):
                 "tag_ids": [],
             },
         )
+        conn.execute(
+            "UPDATE transactions SET repayment_group_id = ? WHERE id IN (?, ?)",
+            (repayment_group_id, source_transaction["id"], credit_transaction["id"]),
+        )
+        source_transaction = _transaction_dict(conn, source_transaction["id"])
+        credit_transaction = _transaction_dict(conn, credit_transaction["id"])
     return {
         "source_transaction": source_transaction,
         "credit_transaction": credit_transaction,
@@ -190,6 +197,8 @@ def update_transaction(conn, transaction_id, payload):
 
     with _atomic(conn):
         old = _require_transaction(conn, transaction_id)
+        if old["transaction_kind"] == "credit_repayment":
+            raise ValidationError("credit repayment entries must be reversed as a group")
         merged = {column: old[column] for column in TRANSACTION_FIELDS - {"tag_ids"}}
         merged["tag_ids"] = _transaction_tag_ids(conn, transaction_id)
         merged.update(payload)
@@ -243,6 +252,8 @@ def delete_transaction(conn, transaction_id):
     """Delete a transaction and reverse its effect on the account balance."""
     with _atomic(conn):
         transaction = _require_transaction(conn, transaction_id)
+        if transaction["transaction_kind"] == "credit_repayment":
+            raise ValidationError("credit repayment entries must be reversed as a group")
         account = _require_account(conn, transaction["account_id"])
         restored_balance = _computed_account_balance(
             account["current_balance"], -float(transaction["amount"])
@@ -252,6 +263,32 @@ def delete_transaction(conn, transaction_id):
             (restored_balance, transaction["account_id"]),
         )
         conn.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+
+
+def delete_credit_card_repayment(conn, repayment_group_id):
+    """Reverse both entries of one newly linked credit-card repayment."""
+    if not isinstance(repayment_group_id, str) or not repayment_group_id.strip():
+        raise ValidationError("repayment_group_id is required")
+    with _atomic(conn):
+        rows = conn.execute(
+            "SELECT id, account_id, amount, transaction_kind FROM transactions "
+            "WHERE repayment_group_id = ? ORDER BY id",
+            (repayment_group_id,),
+        ).fetchall()
+        if not rows:
+            raise NotFoundError("credit repayment not found")
+        if len(rows) != 2 or any(row["transaction_kind"] != "credit_repayment" for row in rows):
+            raise ConflictError("credit repayment group is incomplete")
+        for row in rows:
+            account = _require_account(conn, row["account_id"])
+            restored_balance = _computed_account_balance(
+                account["current_balance"], -float(row["amount"])
+            )
+            conn.execute(
+                "UPDATE accounts SET current_balance = ? WHERE id = ?",
+                (restored_balance, row["account_id"]),
+            )
+        conn.execute("DELETE FROM transactions WHERE repayment_group_id = ?", (repayment_group_id,))
 
 
 def replace_transaction_tags(conn, transaction_id, tag_ids):

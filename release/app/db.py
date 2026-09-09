@@ -8,7 +8,7 @@ from flask import current_app, g
 from taxonomy import seed_taxonomy
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 WAL_RETRY_DELAY_SECONDS = 0.05
 WAL_RETRY_ATTEMPTS = 100
 
@@ -193,6 +193,15 @@ def _migrate_to_version_4(conn):
     conn.execute("ALTER TABLE budgets_v4 RENAME TO budgets")
 
 
+def _migrate_to_version_5(conn):
+    """Link the two entries created for each credit-card repayment."""
+    _add_column_if_absent(conn, "transactions", "repayment_group_id", "TEXT")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transactions_repayment_group "
+        "ON transactions(repayment_group_id)"
+    )
+
+
 def _migration_lock_acquired(conn):
     """Provide a private synchronization point for migration tests."""
 
@@ -220,6 +229,8 @@ def initialize_database_path(db_path):
                 _migrate_to_version_3(conn)
             if current_version < 4:
                 _migrate_to_version_4(conn)
+            if current_version < 5:
+                _migrate_to_version_5(conn)
             if current_version < SCHEMA_VERSION:
                 conn.execute(
                     "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "
