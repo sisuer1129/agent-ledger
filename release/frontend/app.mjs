@@ -29,6 +29,34 @@ export const buildExportPath = (filters, nonce = Date.now()) => {
   query.set('_fresh', String(nonce));
   return `/export.csv?${query}`;
 };
+export const createSubmissionGuard = (onPending = () => {}) => {
+  const pendingKeys = new WeakSet();
+  return async (key, task) => {
+    if (pendingKeys.has(key)) return false;
+    pendingKeys.add(key);
+    onPending(key, true);
+    try {
+      await task();
+      return true;
+    } finally {
+      pendingKeys.delete(key);
+      onPending(key, false);
+    }
+  };
+};
+export const createSavedRefreshRunner = (report) => {
+  const run = async (refresh) => {
+    try {
+      await refresh();
+      report();
+      return true;
+    } catch (error) {
+      report(error, () => run(refresh));
+      return false;
+    }
+  };
+  return run;
+};
 export const budgetState = (percent) => (percent >= 100 ? 'over' : percent >= 80 ? 'warning' : 'normal');
 export const monthlyBalance = ({ income = 0, expense = 0, refunds = 0 } = {}) => (
   Number(income || 0) - Number(expense || 0) + Number(refunds || 0)
@@ -191,6 +219,47 @@ function showStatus(message, retry) {
 
 function safe(task) {
   return Promise.resolve(task()).catch((error) => showStatus(error.message, () => safe(task)));
+}
+
+const submitButtonStates = new WeakMap();
+function setFormSubmitting(form, submitting) {
+  const button = form.querySelector('button[type="submit"]');
+  if (!button) return;
+  if (submitting) {
+    const label = button.querySelector('[data-save-label], [data-account-save-label]') || button;
+    submitButtonStates.set(button, { disabled: button.disabled, label, text: label.textContent });
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    label.textContent = '正在保存…';
+    return;
+  }
+  const previous = submitButtonStates.get(button);
+  if (!previous) return;
+  button.disabled = previous.disabled;
+  button.removeAttribute('aria-busy');
+  previous.label.textContent = previous.text;
+  submitButtonStates.delete(button);
+}
+
+const submitFormOnce = createSubmissionGuard(setFormSubmitting);
+const refreshSavedView = createSavedRefreshRunner((error, retry) => {
+  if (error) showStatus(`已保存，但页面刷新失败：${error.message}`, retry);
+  else showStatus('');
+});
+
+function saveForm(form, { save, onSaved, refresh }) {
+  return submitFormOnce(form, async () => {
+    let saved;
+    try {
+      saved = await save();
+    } catch (error) {
+      showStatus(error.message);
+      return;
+    }
+    if (onSaved) onSaved(saved);
+    form.closest('dialog').close();
+    await refreshSavedView(refresh);
+  });
 }
 
 function renderState(kind, title, detail = '', action = '') {
@@ -847,37 +916,39 @@ function setup() {
     safe(refreshLedger);
   });
   document.querySelector('#exportLink').addEventListener('click', (event) => safe(async () => { event.preventDefault(); const blob = await api(buildExportPath(state.filters)); const anchor = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: 'wallet-export.csv' }); anchor.click(); URL.revokeObjectURL(anchor.href); }));
-  document.querySelector('#transactionForm').addEventListener('submit', (event) => safe(async () => {
+  document.querySelector('#transactionForm').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    const mode = data.transaction_mode;
-    delete data.transaction_mode;
-    if (mode === 'credit_repayment') {
-      const repayment = {
-        source_account_id: data.account_id,
-        credit_account_id: data.repayment_credit_account_id,
-        amount: Number(data.amount),
-        timestamp: data.timestamp,
-      };
-      if (data.description.trim()) repayment.description = data.description.trim();
-      await api('/credit-card-repayments', { method: 'POST', body: JSON.stringify(repayment) });
-    } else {
-      delete data.repayment_credit_account_id;
-      data.transaction_kind = mode;
-      const payload = prepareTransactionPayload(data);
-      payload.amount = normalizeTransactionAmount(
-        payload.amount, payload.transaction_kind,
-        form._originalTransaction?.transaction_kind === payload.transaction_kind
-          ? form._originalTransaction.amount : undefined,
-      );
-      payload.tag_ids = [...form.querySelector('[name=tag_ids]').selectedOptions].map((option) => option.value);
-      const id = form.dataset.transactionId;
-      await api(id ? `/transactions/${id}` : '/transactions', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
-    }
-    form.closest('dialog').close();
-    await refreshAfterSave();
-  }));
+    saveForm(form, {
+      save: async () => {
+        const data = Object.fromEntries(new FormData(form));
+        const mode = data.transaction_mode;
+        delete data.transaction_mode;
+        if (mode === 'credit_repayment') {
+          const repayment = {
+            source_account_id: data.account_id,
+            credit_account_id: data.repayment_credit_account_id,
+            amount: Number(data.amount),
+            timestamp: data.timestamp,
+          };
+          if (data.description.trim()) repayment.description = data.description.trim();
+          return api('/credit-card-repayments', { method: 'POST', body: JSON.stringify(repayment) });
+        }
+        delete data.repayment_credit_account_id;
+        data.transaction_kind = mode;
+        const payload = prepareTransactionPayload(data);
+        payload.amount = normalizeTransactionAmount(
+          payload.amount, payload.transaction_kind,
+          form._originalTransaction?.transaction_kind === payload.transaction_kind
+            ? form._originalTransaction.amount : undefined,
+        );
+        payload.tag_ids = [...form.querySelector('[name=tag_ids]').selectedOptions].map((option) => option.value);
+        const id = form.dataset.transactionId;
+        return api(id ? `/transactions/${id}` : '/transactions', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+      },
+      refresh: refreshAfterSave,
+    });
+  });
   document.querySelector('#deleteTransaction').addEventListener('click', () => safe(async () => {
     const form = document.querySelector('#transactionForm');
     const id = form.dataset.transactionId;
@@ -889,42 +960,51 @@ function setup() {
     form.closest('dialog').close();
     await refreshAfterSave();
   }));
-  document.querySelector('#accountForm').addEventListener('submit', (event) => safe(async () => {
+  document.querySelector('#accountForm').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const id = form.elements.id.value;
-    const raw = Object.fromEntries(new FormData(form));
-    delete raw.id;
-    const target = accountSaveTarget(id);
-    const saved = await api(target.path, {
-      method: target.method,
-      body: JSON.stringify(prepareAccountPayload(raw, !id)),
+    saveForm(form, {
+      save: () => {
+        const raw = Object.fromEntries(new FormData(form));
+        delete raw.id;
+        const target = accountSaveTarget(id);
+        return api(target.path, {
+          method: target.method,
+          body: JSON.stringify(prepareAccountPayload(raw, !id)),
+        });
+      },
+      onSaved: (saved) => { if (!id) state.selectedAccountId = saved.id; },
+      refresh: refreshAfterSave,
     });
-    if (!id) state.selectedAccountId = saved.id;
-    form.closest('dialog').close();
-    await refreshAfterSave();
-  }));
-  document.querySelector('#budgetForm').addEventListener('submit', (event) => safe(async () => {
+  });
+  document.querySelector('#budgetForm').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    data.amount = Number(data.amount);
-    data.effective_from += '-01';
-    await api('/budgets', { method: 'POST', body: JSON.stringify(data) });
-    form.closest('dialog').close();
-    await refreshBudgets();
-  }));
-  document.querySelector('#ruleForm').addEventListener('submit', (event) => safe(async () => {
+    saveForm(form, {
+      save: () => {
+        const data = Object.fromEntries(new FormData(form));
+        data.amount = Number(data.amount);
+        data.effective_from += '-01';
+        return api('/budgets', { method: 'POST', body: JSON.stringify(data) });
+      },
+      refresh: refreshBudgets,
+    });
+  });
+  document.querySelector('#ruleForm').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form));
-    data.priority = Number(data.priority);
-    const target = data.rule_type === 'category' ? 'category_id' : data.rule_type === 'tag' ? 'tag_id' : 'transaction_kind';
-    for (const field of ['category_id', 'tag_id', 'transaction_kind']) if (field !== target) delete data[field];
-    await api('/classification-rules', { method: 'POST', body: JSON.stringify(data) });
-    form.closest('dialog').close();
-    await refreshTaxonomy();
-  }));
+    saveForm(form, {
+      save: () => {
+        const data = Object.fromEntries(new FormData(form));
+        data.priority = Number(data.priority);
+        const target = data.rule_type === 'category' ? 'category_id' : data.rule_type === 'tag' ? 'tag_id' : 'transaction_kind';
+        for (const field of ['category_id', 'tag_id', 'transaction_kind']) if (field !== target) delete data[field];
+        return api('/classification-rules', { method: 'POST', body: JSON.stringify(data) });
+      },
+      refresh: refreshTaxonomy,
+    });
+  });
 }
 
 if (typeof document !== 'undefined') { setup(); if (apiKey()) safe(load); else showStatus('请在设置中填写 API Key 后开始使用'); }

@@ -86,6 +86,45 @@ test('local calendar date does not fall back to the previous UTC day at China mi
     else process.env.TZ = previousTimezone;
   }
 });
+test('submission guard ignores a concurrent submit and always unlocks after failure',async()=>{
+  const transitions=[];
+  const guard=app.createSubmissionGuard((key,pending)=>transitions.push([key.id,pending]));
+  const form={id:'transaction'};
+  let release;
+  let calls=0;
+  const first=guard(form,async()=>{calls+=1;await new Promise(resolve=>{release=resolve;});});
+  const duplicate=await guard(form,async()=>{calls+=1;});
+  assert.equal(duplicate,false);
+  assert.equal(calls,1);
+  release();
+  assert.equal(await first,true);
+  await assert.rejects(guard(form,async()=>{calls+=1;throw new Error('save failed');}),/save failed/);
+  assert.equal(await guard(form,async()=>{calls+=1;}),true);
+  assert.equal(calls,3);
+  assert.deepEqual(transitions,[
+    ['transaction',true],['transaction',false],
+    ['transaction',true],['transaction',false],
+    ['transaction',true],['transaction',false],
+  ]);
+});
+test('saved-view retry repeats only the failed refresh task',async()=>{
+  const reports=[];
+  let retry;
+  let attempts=0;
+  const refreshSaved=app.createSavedRefreshRunner((error,nextRetry)=>{
+    reports.push(error?.message || 'clear');
+    retry=nextRetry;
+  });
+  assert.equal(await refreshSaved(async()=>{
+    attempts+=1;
+    if(attempts===1) throw new Error('refresh failed');
+  }),false);
+  assert.equal(attempts,1);
+  assert.equal(typeof retry,'function');
+  assert.equal(await retry(),true);
+  assert.equal(attempts,2);
+  assert.deepEqual(reports,['refresh failed','clear']);
+});
 test('ledger export URL always bypasses an older browser cache',()=>{
   assert.equal(
     app.buildExportPath({account_id:'card'}, 1721986000123),
@@ -275,10 +314,15 @@ test('taxonomy list uses configured root icons and colours',()=>{
   assert.match(appSource,/category\.color/);
   assert.match(css,/\.taxonomy-category/);
 });
-test('budget and rule submissions keep their form reference through async saves',()=>{
-  for (const formId of ['budgetForm', 'ruleForm']) {
-    assert.match(appSource, new RegExp(`document\\.querySelector\\('#${formId}'\\)\\.addEventListener\\('submit', \\(event\\) => safe\\(async \\(\\) => \\{\\s*event\\.preventDefault\\(\\);\\s*const form = event\\.currentTarget;`));
+test('all write forms lock synchronously and retry only their post-save refresh',()=>{
+  for (const formId of ['transactionForm', 'accountForm', 'budgetForm', 'ruleForm']) {
+    assert.match(appSource, new RegExp(`document\\.querySelector\\('#${formId}'\\)\\.addEventListener\\('submit', \\(event\\) => \\{\\s*event\\.preventDefault\\(\\);\\s*const form = event\\.currentTarget;[\\s\\S]{0,100}?saveForm\\(form, \\{`));
   }
+  assert.match(appSource,/button\.disabled = true;/);
+  assert.match(appSource,/button\.setAttribute\('aria-busy', 'true'\);/);
+  assert.match(appSource,/label\.textContent = '正在保存…';/);
+  assert.match(appSource,/if \(error\) showStatus\(`已保存，但页面刷新失败：\$\{error\.message\}`, retry\);/);
+  assert.doesNotMatch(appSource,/showStatus\(`已保存[^`]*`, \(\) => safe\(/);
   assert.doesNotMatch(appSource,/event\.currentTarget\.closest\('dialog'\)\.close\(\)/);
 });
 test('budget page is driven by the shared monthly summary and supports editing total and root budgets',()=>{
