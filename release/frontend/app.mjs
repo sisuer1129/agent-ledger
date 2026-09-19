@@ -29,6 +29,56 @@ export const buildExportPath = (filters, nonce = Date.now()) => {
   query.set('_fresh', String(nonce));
   return `/export.csv?${query}`;
 };
+export const createIdempotencyKeys = (generate = () => (
+  globalThis.crypto.randomUUID?.() || [...globalThis.crypto.getRandomValues(new Uint8Array(16))].map(value => value.toString(16).padStart(2, '0')).join('')
+)) => {
+  const submissions = new WeakMap();
+  return {
+    get(owner) {
+      if (!submissions.has(owner)) submissions.set(owner, { key: generate() });
+      return submissions.get(owner).key;
+    },
+    clear(owner, key) { if (submissions.get(owner)?.key === key) submissions.delete(owner); },
+    reset(owner) { submissions.delete(owner); },
+  };
+};
+
+export const createIdempotentPoster = (request, keys) => async (form, path, payload) => {
+  const key = keys.get(form);
+  try {
+    const result = await request(path, { method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload) });
+    keys.clear(form, key);
+    return result;
+  } catch (error) {
+    // Network/5xx/409 may follow a committed request; only validation is known not to write.
+    if (error.type === 'validation') keys.clear(form, key);
+    throw error;
+  }
+};
+
+export const createMutationRunner = (refreshSaved, reportError) => {
+  const pending = new Set();
+  const completed = new Set();
+  return async (key, { mutate, onSaved, refresh }) => {
+    if (pending.has(key)) return false;
+    pending.add(key);
+    try {
+      if (!completed.has(key)) {
+        try { await mutate(); } catch (error) { reportError(error); return false; }
+        completed.add(key);
+        if (onSaved) onSaved();
+      }
+      await refreshSaved(refresh);
+      return true;
+    } finally { pending.delete(key); }
+  };
+};
+
+export const transactionAccountOptions = (accounts, transaction = {}) => {
+  if (!transaction.id || !transaction.account_id || accounts.some(account => account.id === transaction.account_id)) return accounts;
+  return [...accounts, { id: transaction.account_id, name: `${transaction.account_name || '原账户'}（已停用）` }];
+};
+
 export const createSubmissionGuard = (onPending = () => {}) => {
   const pendingKeys = new WeakSet();
   return async (key, task) => {
@@ -293,11 +343,16 @@ function setFormSubmitting(form, submitting) {
   submitButtonStates.delete(button);
 }
 
+const transactionIdempotencyKeys = createIdempotencyKeys();
 const submitFormOnce = createSubmissionGuard(setFormSubmitting);
 const refreshSavedView = createSavedRefreshRunner((error, retry) => {
   if (error) showStatus(`已保存，但页面刷新失败：${error.message}`, retry);
   else showStatus('');
 });
+
+const runMutation = createMutationRunner(refreshSavedView, error => showStatus(formatFormError(error)));
+
+const createTransactionOnce = createIdempotentPoster(api, transactionIdempotencyKeys);
 
 function saveForm(form, { save, onSaved, refresh }) {
   const dialog = form.closest('dialog');
@@ -400,11 +455,13 @@ function renderAccountList() {
 
 function populateTransactionForm(transaction = {}) {
   const form = document.querySelector('#transactionForm');
+  form.reset();
+  transactionIdempotencyKeys.reset(form);
   form.dataset.transactionId = transaction.id || '';
   form._budgetPreviewOriginal = transaction;
   form._originalTransaction = transaction;
   form.querySelector('#deleteTransaction').hidden = !transaction.id || transaction.transaction_kind === 'credit_repayment';
-  form.querySelector('[name=account_id]').innerHTML = state.accounts.map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
+  form.querySelector('[name=account_id]').innerHTML = transactionAccountOptions(state.accounts, transaction).map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
   form.querySelector('[name=repayment_credit_account_id]').innerHTML = state.accounts
     .filter((account) => account.type === 'credit')
     .map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
@@ -423,10 +480,10 @@ function populateTransactionForm(transaction = {}) {
 function syncRepaymentAccountChoices(form) {
   const creditId = form.elements.repayment_credit_account_id.value;
   const source = form.elements.account_id;
-  [...source.options].forEach((option) => { option.hidden = option.value === creditId; });
+  [...source.options].forEach((option) => { option.hidden = option.value === creditId || !state.accounts.some(account => account.id === option.value); });
   if (source.selectedOptions[0]?.hidden) {
     const replacement = [...source.options].find((option) => !option.hidden);
-    if (replacement) source.value = replacement.value;
+    source.value = replacement?.value || '';
   }
 }
 
@@ -925,10 +982,9 @@ function setup() {
       await openDialog('transactionDialog', transaction);
     });
     const repaymentGroupId = event.target.closest('[data-reverse-repayment]')?.dataset.reverseRepayment;
-    if (repaymentGroupId) safe(async () => {
-      if (!confirm('确定撤销这笔信用卡还款吗？两个账户的余额都会恢复。')) return;
-      await api(`/credit-card-repayments/${encodeURIComponent(repaymentGroupId)}`, { method: 'DELETE' });
-      await refreshAfterSave();
+    if (repaymentGroupId && confirm('确定撤销这笔信用卡还款吗？两个账户的余额都会恢复。')) runMutation(`repayment:${repaymentGroupId}`, {
+      mutate: () => api(`/credit-card-repayments/${encodeURIComponent(repaymentGroupId)}`, { method: 'DELETE' }),
+      refresh: refreshAfterSave,
     });
     const dialog = event.target.closest('[data-open]')?.dataset.open; if (dialog) safe(() => openDialog(dialog));
     const editBudget = event.target.closest('[data-edit-budget]')?.dataset.editBudget;
@@ -952,7 +1008,16 @@ function setup() {
     if (event.target.id === 'refreshInsights') safe(async () => { state.periodMode = document.querySelector('#periodMode').value; state.periodAnchor = document.querySelector('#periodAnchor').value; await selectAccount(state.selectedAccountId, true); });
     if (event.target.id === 'saveSettings') { localStorage.setItem('apiUrl', document.querySelector('#apiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#apiKey').value); safe(load); }
     if (event.target.id === 'saveMobileSettings') { localStorage.setItem('apiUrl', document.querySelector('#mobileApiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#mobileApiKey').value); safe(load); }
-    if (event.target.id === 'deactivateAccount') safe(async () => { const id = document.querySelector('#accountForm [name=id]').value; await api(`/accounts/${id}`, { method: 'DELETE' }); document.querySelector('#accountDialog').close(); await refreshAfterSave(); });
+    if (event.target.id === 'deactivateAccount') {
+      const dialog = document.querySelector('#accountDialog');
+      const session = dialog._formSession;
+      const id = document.querySelector('#accountForm [name=id]').value;
+      runMutation(`account:${id}`, {
+        mutate: () => api(`/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+        onSaved: () => { if (dialog._formSession === session) dialog.close(); },
+        refresh: refreshAfterSave,
+      });
+    }
   });
   document.addEventListener('input', (event) => {
     if (event.target.id === 'categoryPickerSearch') renderCategoryPicker();
@@ -992,7 +1057,7 @@ function setup() {
             timestamp: data.timestamp,
           };
           if (data.description.trim()) repayment.description = data.description.trim();
-          return api('/credit-card-repayments', { method: 'POST', body: JSON.stringify(repayment) });
+          return createTransactionOnce(form, '/credit-card-repayments', repayment);
         }
         delete data.repayment_credit_account_id;
         data.transaction_kind = mode;
@@ -1004,22 +1069,27 @@ function setup() {
         );
         payload.tag_ids = [...form.querySelector('[name=tag_ids]').selectedOptions].map((option) => option.value);
         const id = form.dataset.transactionId;
-        return api(id ? `/transactions/${id}` : '/transactions', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+        return id ? api(`/transactions/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) })
+          : createTransactionOnce(form, '/transactions', payload);
       },
       refresh: refreshAfterSave,
     });
   });
-  document.querySelector('#deleteTransaction').addEventListener('click', () => safe(async () => {
+  document.querySelector('#deleteTransaction').addEventListener('click', () => {
     const form = document.querySelector('#transactionForm');
     const id = form.dataset.transactionId;
     if (!id) return;
     const description = form.elements.description.value.trim() || '这笔交易';
     const amount = form.elements.amount.value;
     if (!confirm(`确定删除“${description}”（¥${amount}）吗？此操作无法撤销。`)) return;
-    await api(`/transactions/${id}`, { method: 'DELETE' });
-    form.closest('dialog').close();
-    await refreshAfterSave();
-  }));
+    const dialog = form.closest('dialog');
+    const session = dialog._formSession;
+    runMutation(`transaction:${id}`, {
+      mutate: () => api(`/transactions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+      onSaved: () => { if (dialog._formSession === session) dialog.close(); },
+      refresh: refreshAfterSave,
+    });
+  });
   document.querySelector('#accountForm').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;

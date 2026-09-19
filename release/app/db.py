@@ -8,7 +8,7 @@ from flask import current_app, g
 from taxonomy import seed_taxonomy
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 WAL_RETRY_DELAY_SECONDS = 0.05
 WAL_RETRY_ATTEMPTS = 100
 
@@ -202,6 +202,14 @@ def _migrate_to_version_5(conn):
     )
 
 
+def _migrate_to_version_6(conn):
+    conn.execute(
+        "CREATE TABLE idempotency_requests ("
+        "operation TEXT NOT NULL, request_key TEXT PRIMARY KEY NOT NULL, request_hash TEXT NOT NULL, "
+        "response_json TEXT NOT NULL, response_status INTEGER NOT NULL)"
+    )
+
+
 def _migration_lock_acquired(conn):
     """Provide a private synchronization point for migration tests."""
 
@@ -231,6 +239,8 @@ def initialize_database_path(db_path):
                 _migrate_to_version_4(conn)
             if current_version < 5:
                 _migrate_to_version_5(conn)
+            if current_version < 6:
+                _migrate_to_version_6(conn)
             if current_version < SCHEMA_VERSION:
                 conn.execute(
                     "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "

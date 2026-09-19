@@ -1,6 +1,8 @@
 """Authenticated JSON endpoints for the private wallet API."""
 
 import csv
+import hashlib
+import json
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from io import StringIO
@@ -17,6 +19,7 @@ from db import get_db
 from seed_catalog import load_category_color_seed
 from repositories import (
     ACCOUNT_TYPES,
+    _atomic,
     ConflictError,
     NotFoundError,
     ValidationError,
@@ -78,6 +81,43 @@ def auth(view):
     return wrapped
 
 
+def idempotent_create(view):
+    """Commit an optional request key and its successful mutation together.
+
+    Hash the original JSON before defaults/classification so retries without a
+    timestamp replay the first result. No key preserves the legacy API behavior.
+    """
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        key = request.headers.get("Idempotency-Key")
+        if key is None:
+            return view(*args, **kwargs)
+        if not 1 <= len(key) <= 128 or any(ord(char) < 33 or ord(char) > 126 for char in key):
+            return _invalid("idempotency_key", "Idempotency-Key must contain 1 to 128 printable ASCII characters without spaces")
+        payload = _json_object()
+        request_hash = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        operation = request.path
+        conn = get_db()
+        with _atomic(conn):
+            prior = conn.execute(
+                "SELECT operation, request_hash, response_json, response_status FROM idempotency_requests "
+                "WHERE request_key = ?", (key,),
+            ).fetchone()
+            if prior is not None:
+                if prior["operation"] != operation or prior["request_hash"] != request_hash:
+                    return error("conflict", "Idempotency-Key was already used with a different request", 409, "idempotency_key")
+                return jsonify(json.loads(prior["response_json"])), prior["response_status"]
+            response = current_app.make_response(view(*args, **kwargs))
+            if 200 <= response.status_code < 300:
+                conn.execute(
+                    "INSERT INTO idempotency_requests (operation, request_key, request_hash, response_json, response_status) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (operation, key, request_hash, json.dumps(response.get_json()), response.status_code),
+                )
+            return response
+    return wrapped
+
+
 def _finite_number(value, field, minimum=None):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ApiValidationError(field, field + " must be a finite number")
@@ -119,7 +159,7 @@ def _account_values(data, creating=False):
 def _repository_validation(error_value):
     message = str(error_value)
     field = "payload"
-    for candidate in ("credit_account_id", "source_account_id", "current_balance", "monthly_budget", "credit_limit", "budget_period", "statement_day", "due_day", "due_month_offset", "name", "type", "icon", "notes"):
+    for candidate in ("category_id", "transaction_kind", "amount", "credit_account_id", "source_account_id", "current_balance", "monthly_budget", "credit_limit", "budget_period", "statement_day", "due_day", "due_month_offset", "name", "type", "icon", "notes"):
         if candidate in message:
             field = candidate
             break
@@ -528,6 +568,7 @@ def register_routes(app):
 
     @app.post("/transactions")
     @auth
+    @idempotent_create
     def transaction_create():
         data = _json_object()
         if "timestamp" not in data:
@@ -550,6 +591,7 @@ def register_routes(app):
 
     @app.post("/credit-card-repayments")
     @auth
+    @idempotent_create
     def credit_card_repayment_create():
         data = _json_object()
         if "timestamp" not in data:

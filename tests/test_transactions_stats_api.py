@@ -728,7 +728,7 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         self.assertEqual(invalid.get_json()["error"]["field"], "credit_account_id")
 
     def test_amount_filters_match_csv_and_signed_boundaries(self):
-        saved = [self.add_transaction(amount=value, transaction_kind='expense' if value < 0 else 'income') for value in (-120, -30.5, 50, 200)]
+        saved = [self.add_transaction(amount=value, transaction_kind='expense' if value < 0 else 'income', category_id='expense_dining_meal' if value < 0 else 'income_salary_salary') for value in (-120, -30.5, 50, 200)]
         for query, expected in [('min_amount=-40&max_amount=-30.5', [saved[1]['id']]), ('min_amount=50', [saved[2]['id'], saved[3]['id']]), ('max_amount=0', [saved[0]['id'], saved[1]['id']]), ('min_amount=&max_amount=', [row['id'] for row in saved])]:
             with self.subTest(query=query):
                 response = self.request('GET', '/transactions?' + query)

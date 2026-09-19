@@ -116,7 +116,7 @@ class SchemaMigrationTest(unittest.TestCase):
                 self.assertTrue(column_exists(conn, "categories", column))
             for column in TRANSACTION_V5_COLUMNS:
                 self.assertTrue(column_exists(conn, "transactions", column))
-            self.assertEqual(schema_version(conn), 5)
+            self.assertEqual(schema_version(conn), 6)
             init_database(self.app)
             self.assertEqual(
                 conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0],
@@ -128,7 +128,7 @@ class SchemaMigrationTest(unittest.TestCase):
                 ).fetchone()[0],
                 before_balance,
             )
-            self.assertEqual(schema_version(conn), 5)
+            self.assertEqual(schema_version(conn), 6)
 
     def test_v4_upgrade_preserves_existing_budgets_and_history_and_accepts_total_budget(self):
         with closing(connect_database(self.db_path)) as conn:
@@ -154,7 +154,7 @@ class SchemaMigrationTest(unittest.TestCase):
         init_database(self.app)
 
         with closing(connect_database(self.db_path)) as conn:
-            self.assertEqual(schema_version(conn), 5)
+            self.assertEqual(schema_version(conn), 6)
             self.assertEqual(
                 [tuple(row) for row in conn.execute(
                     "SELECT id, scope_type, scope_id, amount, effective_from FROM budgets "
@@ -326,7 +326,7 @@ class SchemaMigrationTest(unittest.TestCase):
 
         with closing(connect_database(self.db_path)) as conn:
             self.assertEqual(migration_calls, 1)
-            self.assertEqual(schema_version(conn), 5)
+            self.assertEqual(schema_version(conn), 6)
 
     def test_late_migration_failure_rolls_back_schema_and_version(self):
         self.assertTrue(

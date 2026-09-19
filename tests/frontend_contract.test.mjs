@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260909-form-errors1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260909-form-errors1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260919-idempotency1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260919-idempotency1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -607,4 +607,108 @@ test('pagination reads all 123 records and stops without an extra request, inclu
   await pager.reset({}, { items: [], total: 0, has_more: false, next_offset: null });
   assert.equal(pager.state.items.length, 0);
   assert.equal(pager.state.hasMore, false);
+});
+
+test('new transaction idempotency keys survive identical retries and reset for new forms', () => {
+  let serial = 0;
+  const keys = app.createIdempotencyKeys(() => `key-${++serial}`);
+  const form = {};
+  const first = keys.get(form, '/transactions', { amount: -10 });
+  assert.equal(keys.get(form, '/transactions', { amount: -10 }), first);
+  assert.equal(keys.get(form, '/transactions', { amount: -20 }), first);
+  const repayment = keys.get(form, '/credit-card-repayments', { amount: 20 });
+  assert.equal(keys.get(form, '/credit-card-repayments', { amount: 20 }), repayment);
+  keys.clear(form, 'unrelated-old-key'); // A late completion cannot clear the current logical submission.
+  assert.equal(keys.get(form, '/credit-card-repayments', { amount: 20 }), repayment);
+  keys.clear(form, repayment);
+  assert.notEqual(keys.get(form, '/credit-card-repayments', { amount: 20 }), repayment);
+  keys.reset(form);
+  assert.equal(keys.get(form, '/transactions', { amount: -10 }), 'key-3');
+});
+
+test('destructive actions lock synchronously and never repeat a successful write after refresh failure', async () => {
+  let resolveWrite;
+  let writes = 0, refreshes = 0;
+  const errors = [];
+  const run = app.createMutationRunner(async refresh => { try { await refresh(); } catch {} }, error => errors.push(error.message));
+  const options = { mutate: () => { writes++; return new Promise(resolve => { resolveWrite = resolve; }); }, refresh: async () => { refreshes++; throw new Error('refresh failed'); } };
+  const first = run('transaction:1', options);
+  await run('transaction:1', options);
+  assert.equal(writes, 1);
+  resolveWrite();
+  await first;
+  await run('transaction:1', options);
+  assert.equal(writes, 1);
+  assert.equal(refreshes, 2);
+  let attempts = 0;
+  const failing = { mutate: async () => { attempts++; throw new Error('write failed'); }, refresh: async () => assert.fail('must not refresh') };
+  await run('transaction:2', failing);
+  await run('transaction:2', failing);
+  assert.equal(attempts, 2);
+  assert.deepEqual(errors, ['write failed', 'write failed']);
+});
+
+test('historical inactive account is available only for editing its own transaction', () => {
+  const active = [{ id: 'active', name: '当前账户' }];
+  const historical = { id: 'tx', account_id: 'closed', account_name: '旧账户' };
+  assert.deepEqual(app.transactionAccountOptions(active, historical), [...active, { id: 'closed', name: '旧账户（已停用）' }]);
+  assert.deepEqual(app.transactionAccountOptions(active, {}), active);
+  assert.deepEqual(app.transactionAccountOptions(active, { account_id: 'closed' }), active);
+  assert.equal(app.transactionAccountOptions(active, { id: 'tx', account_id: 'active' }).length, 1);
+});
+
+test('idempotent posting keeps key after uncertain failure and clears only after success or validation rejection', async () => {
+  let serial = 0;
+  const keys = app.createIdempotencyKeys(() => `key-${++serial}`);
+  const headers = [];
+  let failure = Object.assign(new Error('connection lost'), { type: 'network' });
+  const post = app.createIdempotentPoster(async (path, options) => { headers.push(options.headers['Idempotency-Key']); if (failure) throw failure; return { id: 'saved' }; }, keys);
+  const form = {};
+  await assert.rejects(post(form, '/transactions', { amount: 10 }));
+  failure = Object.assign(new Error('server error'), { type: 'server' });
+  await assert.rejects(post(form, '/transactions', { amount: 20 }));
+  assert.deepEqual(headers, ['key-1', 'key-1']);
+  failure = null;
+  await post(form, '/transactions', { amount: 10 });
+  assert.equal(headers.at(-1), 'key-1');
+  failure = Object.assign(new Error('invalid account'), { type: 'validation' });
+  await assert.rejects(post(form, '/credit-card-repayments', {}));
+  assert.equal(headers.at(-1), 'key-2');
+  failure = null;
+  await post(form, '/credit-card-repayments', { amount: 10 });
+  assert.equal(headers.at(-1), 'key-3');
+});
+
+test('opening a new transaction clears edited fields and reopening an edit restores its data', () => {
+  const nodes = new Map();
+  const form = {
+    dataset: {},
+    querySelector(selector) {
+      if (!nodes.has(selector)) nodes.set(selector, { value: '', options: [], checked: false, hidden: false });
+      return nodes.get(selector);
+    },
+    reset() { for (const node of nodes.values()) { node.value = ''; node.checked = false; } },
+  };
+  const body = appSource.slice(appSource.indexOf('function populateTransactionForm('), appSource.indexOf('\nfunction syncRepaymentAccountChoices('));
+  const populate = new Function('document', 'transactionIdempotencyKeys', 'state', 'transactionAccountOptions', 'escapeHtml', 'categoryOptions', 'today', 'transactionEditMode', 'setTransactionFormMode', 'renderCategoryPicker', `${body}; return populateTransactionForm;`)(
+    { querySelector: () => form }, { reset() {} }, { accounts: [], taxonomy: { tags: [] } }, app.transactionAccountOptions,
+    value => value, () => [], () => '2026-09-19', app.transactionEditMode, () => {}, () => {},
+  );
+  const old = { id: 'old', account_id: 'a', description: '原交易备注', amount: -23.5, transaction_kind: 'expense', timestamp: '2026-09-18T12:00:00Z' };
+  populate(old);
+  assert.equal(form.querySelector('[name=description]').value, '原交易备注');
+  populate();
+  assert.equal(form.querySelector('[name=description]').value, '');
+  assert.equal(form.querySelector('[name=amount]').value, '');
+  assert.equal(form.dataset.transactionId, '');
+  assert.equal(form.querySelector('#deleteTransaction').hidden, true);
+  populate(old);
+  assert.equal(form.querySelector('[name=description]').value, '原交易备注');
+  assert.equal(form.querySelector('[name=amount]').value, 23.5);
+  assert.equal(form.querySelector('[name=timestamp]').value, '2026-09-18');
+  assert.equal(form.querySelector('#deleteTransaction').hidden, false);
+});
+
+test('hidden transaction delete action overrides the general button display rule', () => {
+  assert.match(css, /#deleteTransaction\[hidden\]\s*\{\s*display:\s*none\s*!important/);
 });

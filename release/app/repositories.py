@@ -202,10 +202,12 @@ def update_transaction(conn, transaction_id, payload):
         merged = {column: old[column] for column in TRANSACTION_FIELDS - {"tag_ids"}}
         merged["tag_ids"] = _transaction_tag_ids(conn, transaction_id)
         merged.update(payload)
+        if merged["transaction_kind"] == "credit_repayment":
+            raise ValidationError("transaction_kind cannot change to credit_repayment; use the repayment endpoint")
         data = _validate_transaction_values(conn, merged, transaction_id=transaction_id)
 
         old_account = _require_account(conn, old["account_id"])
-        new_account = _require_active_account(conn, data["account_id"])
+        new_account = old_account if old["account_id"] == data["account_id"] else _require_active_account(conn, data["account_id"])
         _validate_category(conn, data["category_id"])
         _validate_tag_ids(conn, data["tag_ids"])
 
@@ -512,6 +514,14 @@ def _validate_transaction_values(conn, data, transaction_id=None):
     if result["classification_status"] not in CLASSIFICATION_STATUSES:
         raise ValidationError("invalid classification_status")
     result["tag_ids"] = _normalise_tag_ids(result["tag_ids"])
+    kind, amount = result["transaction_kind"], result["amount"]
+    if (kind == "expense" and amount > 0) or (kind in {"income", "refund"} and amount < 0):
+        raise ValidationError("amount sign does not match transaction_kind")
+    if result["category_id"] is not None and kind in {"expense", "income", "refund"}:
+        category = conn.execute("SELECT type FROM categories WHERE id = ?", (result["category_id"],)).fetchone()
+        expected_type = "income" if kind == "income" else "expense"
+        if category is not None and category["type"] != expected_type:
+            raise ValidationError("category_id type does not match transaction_kind")
     return result
 
 
