@@ -710,6 +710,20 @@ def register_routes(app):
         total = sum(float(row["value"]) for row in rows)
         return jsonify([{**dict(row), "value": float(row["value"]), "percentage": (float(row["value"]) / total * 100 if total else 0)} for row in rows])
 
+    @app.get("/stats/tags")
+    @auth
+    def tag_stats():
+        start, end = _month_bounds(request.args.get("year", date.today().year), request.args.get("month", date.today().month))
+        rows = get_db().execute(
+            "SELECT tg.id, tg.name AS label, tg.group_name, SUM(-t.amount) AS value, COUNT(DISTINCT t.id) AS count "
+            "FROM transactions t JOIN transaction_tags tt ON tt.transaction_id = t.id JOIN tags tg ON tg.id = tt.tag_id "
+            "WHERE t.excluded_from_stats = 0 AND t.transaction_kind = 'expense' AND t.amount < 0 "
+            "AND t.timestamp >= ? AND t.timestamp < ? GROUP BY tg.id, tg.name, tg.group_name ORDER BY value DESC, tg.id",
+            (start.isoformat() + "T00:00:00+00:00", end.isoformat() + "T00:00:00+00:00"),
+        ).fetchall()
+        total = sum(float(row["value"]) for row in rows)
+        return jsonify([{**dict(row), "value": float(row["value"]), "percentage": (float(row["value"]) / total * 100 if total else 0)} for row in rows])
+
     @app.get("/export.csv")
     @auth
     def export_csv():

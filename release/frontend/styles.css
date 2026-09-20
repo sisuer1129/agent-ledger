@@ -47,6 +47,15 @@ h2 { font-size: 20px; letter-spacing: -.02em; }
 .taxonomy-category p { margin: 2px 0 0; color: var(--text-3); font-size: 13px; }
 .taxonomy-budget { margin-top: 9px; }
 .taxonomy-budget-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tag-stats-section { display: grid; gap: 10px; margin: 28px 0; }
+.tag-stats-section h2 { margin: 0; }
+.tag-stats-section p, .tag-stat-meta { margin: 2px 0 0; color: var(--text-3); font-size: 13px; }
+.tag-stat-row { text-align: left; }
+.tag-stat-row:hover { background: var(--hover); }
+.tag-stat-row > span:first-child { min-width: 0; }
+.tag-stat-row strong { display: block; overflow-wrap: anywhere; }
+.tag-stat-row .amount { display: grid; justify-items: end; gap: 1px; }
+.tag-stat-row .amount small { color: var(--text-3); font-size: 12px; }
 .account-row, .ledger-row, .budget-row, .rule-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 16px; border-bottom: 1px solid var(--hairline); text-align: left; }
 .account-group:last-child .account-row:last-child, .ledger-row:last-child, .budget-row:last-child, .rule-row:last-child { border-bottom: 0; }
 .ledger-category { display: none; align-items: flex-start; gap: 6px; max-width: 100%; padding: 4px 9px; border-radius: var(--r-pill); background: var(--hover); color: var(--text-2); font-size: 13px; line-height: 1.35; white-space: normal; overflow-wrap: anywhere; }

@@ -636,6 +636,28 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         self.assertEqual(exported_rows[0][0], "交易 ID")
         self.assertIn(purchase["id"], [row[0] for row in exported_rows[1:]])
 
+    def test_tag_stats_include_all_tags_and_count_each_multi_tagged_expense(self):
+        self.add_transaction(
+            account_id="cash", amount=-120, description="午饭", tag_ids=["family_member_a", "travel"],
+        )
+        self.add_transaction(
+            account_id="cash", amount=-30, description="咖啡", tag_ids=["travel"],
+        )
+        self.add_transaction(
+            account_id="cash", amount=50, description="退款", transaction_kind="refund", tag_ids=["travel"],
+        )
+        self.add_transaction(
+            account_id="cash", amount=-20, description="未标记", tag_ids=[],
+        )
+
+        response = self.request("GET", "/stats/tags?year=2026&month=7")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [
+            {"id": "travel", "label": "旅行", "group_name": "旅行项目", "value": 150.0, "count": 2, "percentage": 55.55555555555556},
+            {"id": "family_member_a", "label": "示例成员A", "group_name": "家庭成员", "value": 120.0, "count": 1, "percentage": 44.44444444444444},
+        ])
+
     def test_overview_treats_credit_card_overpayment_as_an_asset(self):
         response = self.request("POST", "/accounts", {
             "name": "溢缴信用卡", "type": "credit", "initial_balance": 100,

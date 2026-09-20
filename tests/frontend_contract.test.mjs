@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260919-idempotency1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260919-idempotency1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260920-tagstats1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-tagstats1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -66,6 +66,14 @@ test('ledger filters keep primary controls visible and place low-frequency field
   assert.match(css,/\.filter-main\s*\{[^}]*grid-template-columns/);
   assert.match(css,/\.filter-more-fields\s*\{[^}]*grid-template-columns/);
   assert.match(appSource,/resetFilters/);
+});
+test('taxonomy page presents month-based tag spending statistics with a drill-down',()=>{
+  assert.match(html,/id="tagStatsRows"/);
+  for (const token of ['stats/tags', 'data-tag-stat', '已标记消费占比', '多标签交易会分别计入各标签']) assert.ok(appSource.includes(token));
+  assert.deepEqual(app.monthLedgerFilters('2026-02','travel'), {
+    start: '2026-02-01', end: '2026-02-28', tag_id: 'travel', transaction_kind: 'expense',
+  });
+  assert.match(appSource,/renderMobile\('ledger'\)/);
 });
 test('frontend state covers mobile, dialogs, retries and chart fallbacks',()=>{
   for(const token of ['async function renderMobile','refreshBudgetTargets','refreshRuleTargets','function safe','showStatus','refreshAfterSave','editTransaction','deactivateAccount','renderCharts(detail, categoryPresentationMap())','mobile-settings','预算 ${formatMoney(account.monthly_budget)}']) assert.ok(appSource.includes(token));

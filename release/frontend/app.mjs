@@ -767,8 +767,8 @@ async function refreshTaxonomy(month = today().slice(0, 7)) {
   await ensureTaxonomy();
   state.taxonomyMonth = month;
   document.querySelector('#taxonomyMonth').value = month;
-  const [rules, transactions, summary] = await Promise.all([
-    api('/classification-rules'), api('/transactions?limit=1000'), api(`/budget-summary?month=${month}`),
+  const [rules, transactions, summary, tags] = await Promise.all([
+    api('/classification-rules'), api('/transactions?limit=1000'), api(`/budget-summary?month=${month}`), api(`/stats/tags?year=${month.slice(0, 4)}&month=${Number(month.slice(5, 7))}`),
   ]);
   if (requestToken !== taxonomyMonthRequestToken) return;
   const budgetByCategory = new Map(summary.categories.map((category) => [category.id, category]));
@@ -778,6 +778,7 @@ async function refreshTaxonomy(month = today().slice(0, 7)) {
     const budgetMarkup = details ? `<div class="taxonomy-budget"><div class="taxonomy-budget-meta budget-${details.status}"><span>${details.spend}</span><span>${details.budget}</span><span>${details.usage}</span><span>${details.balance}</span></div>${budgetProgress(budget, false)}</div>` : '';
     return `<section class="taxonomy-category" style="--category-color:${escapeHtml(category.color || state.taxonomy.category_fallback_color)}"><span class="taxonomy-category-icon">${escapeHtml(category.icon || '•')}</span><div><strong>${escapeHtml(category.name)}</strong><p>${(category.children || []).map((item) => escapeHtml(item.name)).join('、')}</p>${budgetMarkup}</div></section>`;
   }).join('');
+  document.querySelector('#tagStatsRows').innerHTML = tagStatsMarkup(tags);
   const needsReview = transactions.filter((item) => item.classification_status === 'needs_review');
   document.querySelector('#ruleRows').innerHTML = rules.map((rule) => `<div class="rule-row"><span>${escapeHtml(rule.pattern)}<br><span class="meta">${rule.rule_type} · 优先级 ${rule.priority}</span></span></div>`).join('') + `<div class="rule-row"><span>待整理队列<br><span class="meta">${needsReview.length} 笔待确认分类</span></span></div>`;
 }
@@ -831,6 +832,24 @@ function mobileCategoryBudgetMarkup(category, rows) {
   return `<section class="mobile-category-section">${budgetMarkup}${leafRows ? `<div class="unified-list">${leafRows}</div>` : ''}</section>`;
 }
 
+function tagStatsMarkup(rows, emptyDetail = '本月暂无已标记的支出。') {
+  if (!rows.length) return renderState('list-state', '暂无标签消费', emptyDetail);
+  return rows.map((item) => `<button class="ledger-row tag-stat-row" type="button" data-tag-stat="${escapeHtml(item.id)}"><span><strong>${escapeHtml(item.label)}</strong><span class="tag-stat-meta">${escapeHtml(item.group_name)} · ${item.count} 笔 · 已标记消费占比 ${item.percentage.toFixed(0)}%</span></span><span class="amount">${formatMoney(item.value)}<small>查看明细</small></span></button>`).join('');
+}
+
+export function monthLedgerFilters(month, tagId) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const end = String(new Date(year, monthNumber, 0).getDate()).padStart(2, '0');
+  return { start: `${month}-01`, end: `${month}-${end}`, tag_id: tagId, transaction_kind: 'expense' };
+}
+
+async function showTagLedger(tagId, month) {
+  state.filters = monthLedgerFilters(month, tagId);
+  populateFilterOptions();
+  if (window.matchMedia('(max-width: 899px)').matches) await renderMobile('ledger');
+  else await showDesktopPage('ledger');
+}
+
 async function renderMobile(tab, selectedMonth) {
   mobileViewRequestToken += 1;
   transactionPagers['mobile-ledger']?.invalidate();
@@ -848,17 +867,18 @@ async function renderMobile(tab, selectedMonth) {
     target.innerHTML = accountHead + accountGroups;
   } else if (tab === 'ledger') {
     target.innerHTML = '<div id="mobileLedgerRows" class="unified-list"></div>';
-    await pagerFor('mobile-ledger', '#mobileLedgerRows').reset({});
+    await pagerFor('mobile-ledger', '#mobileLedgerRows').reset(state.filters);
   } else if (tab === 'stats') {
     const requestToken = ++mobileStatsRequestToken;
     const month = selectedMonth || state.mobileStatsMonth || today().slice(0, 7);
     state.mobileStatsMonth = month;
     await ensureTaxonomy();
     const [year, monthNumber] = month.split('-').map(Number);
-    const [overview, categories, summary] = await Promise.all([
+    const [overview, categories, summary, tags] = await Promise.all([
       api(`/overview?year=${year}&month=${monthNumber}`),
       api(`/stats/categories?year=${year}&month=${monthNumber}`),
       api(`/budget-summary?month=${month}`),
+      api(`/stats/tags?year=${year}&month=${monthNumber}`),
     ]);
     if (requestToken !== mobileStatsRequestToken) return;
     const rootIds = categoryRootIdMap();
@@ -872,7 +892,7 @@ async function renderMobile(tab, selectedMonth) {
     const groups = summary.categories.filter((category) => category.budget_amount !== null || category.spent_amount !== 0 || rowsByRoot.has(category.id));
     const groupMarkup = groups.map((category) => mobileCategoryBudgetMarkup(category, rowsByRoot.get(category.id) || [])).join('');
     const ungroupedMarkup = ungrouped.length ? `<div class="unified-list">${ungrouped.map((item) => `<div class="ledger-row category-stat-row"><span>${escapeHtml(item.label)}</span><span class="amount">${formatMoney(item.value)} · ${item.percentage.toFixed(0)}%</span></div>`).join('')}</div>` : '';
-    target.innerHTML = `<div class="page-head mobile-stats-head"><h2>统计</h2><input id="mobileStatsMonth" type="month" value="${month}"></div><p>收入 ${formatMoney(overview.income)} · 支出 ${formatMoney(overview.expense)}</p><div class="mobile-category-stats">${groupMarkup || '<p class="meta">暂无支出</p>'}${ungroupedMarkup}</div>`;
+    target.innerHTML = `<div class="page-head mobile-stats-head"><h2>统计</h2><input id="mobileStatsMonth" type="month" value="${month}"></div><p>收入 ${formatMoney(overview.income)} · 支出 ${formatMoney(overview.expense)}</p><div class="mobile-category-stats">${groupMarkup || '<p class="meta">暂无支出</p>'}${ungroupedMarkup}</div><section class="tag-stats-section"><div><h3>标签统计</h3><p>多标签交易会分别计入各标签。</p></div><div class="unified-list">${tagStatsMarkup(tags)}</div></section>`;
   } else {
     target.innerHTML = `<section class="mobile-settings"><h2>连接设置</h2><label>API 地址<input id="mobileApiUrl" value="${escapeHtml(baseUrl())}"></label><label>API Key<input id="mobileApiKey" type="password" value="${escapeHtml(apiKey())}"></label><button id="saveMobileSettings" class="primary">保存</button></section>`;
   }
@@ -1005,6 +1025,8 @@ function setup() {
     if (event.target.closest('[data-close]')) closeDialog(event.target.closest('[data-close]'));
     if (event.target.closest('[data-mobile-account-back]')) safe(() => renderMobile('home'));
     const tab = event.target.closest('[data-mobile-tab]')?.dataset.mobileTab; if (tab) safe(() => renderMobile(tab));
+    const tagId = event.target.closest('[data-tag-stat]')?.dataset.tagStat;
+    if (tagId) safe(() => showTagLedger(tagId, window.matchMedia('(max-width: 899px)').matches ? state.mobileStatsMonth : state.taxonomyMonth));
     if (event.target.id === 'refreshInsights') safe(async () => { state.periodMode = document.querySelector('#periodMode').value; state.periodAnchor = document.querySelector('#periodAnchor').value; await selectAccount(state.selectedAccountId, true); });
     if (event.target.id === 'saveSettings') { localStorage.setItem('apiUrl', document.querySelector('#apiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#apiKey').value); safe(load); }
     if (event.target.id === 'saveMobileSettings') { localStorage.setItem('apiUrl', document.querySelector('#mobileApiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#mobileApiKey').value); safe(load); }
