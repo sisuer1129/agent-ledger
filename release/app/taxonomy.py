@@ -55,53 +55,20 @@ def _seed_categories(conn):
 
 def _insert_category(conn, category_id, name, category_type, parent_id, sort_order):
     conn.execute(
-        "INSERT INTO categories "
+        "INSERT OR IGNORE INTO categories "
         "(id, name, type, icon, keywords, parent_id, sort_order, is_active) "
-        "VALUES (?, ?, ?, '', '', ?, ?, 1) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "name = excluded.name, type = excluded.type, parent_id = excluded.parent_id, "
-        "sort_order = excluded.sort_order, is_active = 1",
+        "VALUES (?, ?, ?, '', '', ?, ?, 1)",
         (category_id, name, category_type, parent_id, sort_order),
     )
 
 
 def _seed_tags(conn):
-    tags = load_tag_seed()["tags"]
-    person_tag_ids = {
-        tag["name"]: tag["id"]
-        for tag in tags
-        if tag["name"] in {"本人", "配偶", "大宝", "二宝", "家庭公共"}
-    }
-    protected_ids = {
-        row["id"]
-        for name, expected_id in person_tag_ids.items()
-        for row in conn.execute("SELECT id FROM tags WHERE name = ?", (name,))
-        if row["id"] != expected_id
-    }
-    for tag in tags:
-        if tag["id"] in protected_ids:
-            conn.execute(
-                "UPDATE tags SET group_name = ?, is_active = 1 WHERE id = ?",
-                (tag["group"], tag["id"]),
-            )
-            continue
-        name_owner = conn.execute(
-            "SELECT id FROM tags WHERE name = ? AND id <> ?", (tag["name"], tag["id"])
-        ).fetchone()
-        if name_owner is not None:
-            # A user may have already given another historical tag this display
-            # name. Keep both stable IDs intact and let the UI use that person's
-            # existing tag rather than aborting application startup.
-            conn.execute(
-                "UPDATE tags SET group_name = ?, is_active = 1 WHERE id = ?",
-                (tag["group"], tag["id"]),
-            )
-            continue
+    # IDs and names may both belong to user-edited historical tags. Never
+    # rename, reactivate, or merge them while adding missing defaults.
+    for tag in load_tag_seed()["tags"]:
         conn.execute(
-            "INSERT INTO tags (id, name, group_name, keywords, is_active) "
-            "VALUES (?, ?, ?, '', 1) "
-            "ON CONFLICT(id) DO UPDATE SET name = excluded.name, "
-            "group_name = excluded.group_name, is_active = 1",
+            "INSERT OR IGNORE INTO tags (id, name, group_name, keywords, is_active) "
+            "VALUES (?, ?, ?, '', 1)",
             (tag["id"], tag["name"], tag["group"]),
         )
 

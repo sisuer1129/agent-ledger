@@ -215,7 +215,7 @@ class TaxonomySeedTest(unittest.TestCase):
                 "billing_cycle",
             )
 
-    def test_reseeding_preserves_edited_or_deactivated_taxonomy_rows_and_restores_missing_rows(self):
+    def test_explicit_seeding_preserves_edits_and_only_restores_missing_rows(self):
         init_database(self.app)
         with closing(connect_database(self.db_path)) as conn:
             conn.execute(
@@ -239,14 +239,14 @@ class TaxonomySeedTest(unittest.TestCase):
                 tuple(conn.execute(
                     "SELECT name, is_active FROM categories WHERE id = 'expense_dining_meal'"
                 ).fetchone()),
-                ("正餐", 1),
+                ("自定义正餐", 0),
             )
             self.assertEqual(
                 tuple(conn.execute(
                     "SELECT name, group_name, keywords, is_active FROM tags "
                     "WHERE id = 'subscription'"
                 ).fetchone()),
-                ("订阅", "既有标签", "手动维护", 1),
+                ("自定义订阅", "custom", "手动维护", 0),
             )
             self.assertEqual(
                 tuple(conn.execute(

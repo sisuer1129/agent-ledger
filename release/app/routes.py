@@ -310,10 +310,12 @@ def _parse_anchor(value):
 
 def _transaction_request_filters(pagination=False):
     keys = ("start", "end", "account_id", "category_id", "tag_id", "transaction_kind",
-            "min_amount", "max_amount", "query")
+            "min_amount", "max_amount", "query", "stats_only")
     if pagination:
         keys += ("limit", "offset")
     filters = {key: request.args.get(key) for key in keys if request.args.get(key) not in (None, "")}
+    if "stats_only" in filters and filters["stats_only"] not in ("0", "1"):
+        raise ApiValidationError("stats_only", "stats_only must be 0 or 1")
     for field in ("min_amount", "max_amount"):
         if field in filters:
             try:

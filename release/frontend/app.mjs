@@ -82,7 +82,13 @@ const PERSON_TAG_NAMES = ['本人', '配偶', '大宝', '二宝', '家庭公共'
 export const transactionTagOptions = (tags, transaction = {}) => {
   const byId = new Map(tags.map((tag) => [tag.id, tag]));
   const byName = new Map(tags.map((tag) => [tag.name, tag]));
-  const personTags = PERSON_TAG_NAMES.map((name) => byName.get(name)).filter(Boolean);
+  const legacyPeople = { 大宝: ['family_member_a', '示例成员A'], 二宝: ['family_member_b', '示例成员B'] };
+  const personTags = PERSON_TAG_NAMES.map((name) => {
+    if (byName.has(name)) return byName.get(name);
+    const [id, oldName] = legacyPeople[name] || [];
+    const legacy = byId.get(id);
+    return legacy && legacy.name === oldName ? { ...legacy, name } : null;
+  }).filter(Boolean);
   const personTagIds = new Set(personTags.map((tag) => tag.id));
   const selectedLegacyTags = (transaction.tag_ids || [])
     .filter((tagId) => !personTagIds.has(tagId))
@@ -664,7 +670,9 @@ function populateFilterOptions() {
   form.querySelector('[name=account_id]').innerHTML = '<option value="">全部账户</option>' + state.accounts.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
   form.querySelector('[name=category_id]').innerHTML = '<option value="">全部分类</option>' + categoryOptions().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
   form.querySelector('[name=tag_id]').innerHTML = '<option value="">全部标签</option>' + (state.taxonomy?.tags || []).map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
+  form.reset();
   Object.entries(state.filters).forEach(([name, value]) => { if (form.elements[name]) form.elements[name].value = value; });
+  if (state.filters.stats_only === '1') form.querySelector('.filter-more').open = true;
 }
 
 async function ensureTaxonomy() {
@@ -774,7 +782,7 @@ async function refreshBudgets() {
   document.querySelector('#budgetRows').innerHTML = `<section class="budget-category-grid">${categoryRows.join('')}</section>${legacyAccounts ? `<div class="unified-list budget-legacy-accounts">${legacyAccounts}</div>` : ''}`;
 }
 
-async function refreshTaxonomy(month = today().slice(0, 7)) {
+async function refreshTaxonomy(month = state.taxonomyMonth || today().slice(0, 7)) {
   const requestToken = ++taxonomyMonthRequestToken;
   await ensureTaxonomy();
   state.taxonomyMonth = month;
@@ -790,7 +798,7 @@ async function refreshTaxonomy(month = today().slice(0, 7)) {
     const budgetMarkup = details ? `<div class="taxonomy-budget"><div class="taxonomy-budget-meta budget-${details.status}"><span>${details.spend}</span><span>${details.budget}</span><span>${details.usage}</span><span>${details.balance}</span></div>${budgetProgress(budget, false)}</div>` : '';
     return `<section class="taxonomy-category" style="--category-color:${escapeHtml(category.color || state.taxonomy.category_fallback_color)}"><span class="taxonomy-category-icon">${escapeHtml(category.icon || '•')}</span><div><strong>${escapeHtml(category.name)}</strong><p>${(category.children || []).map((item) => escapeHtml(item.name)).join('、')}</p>${budgetMarkup}</div></section>`;
   }).join('');
-  document.querySelector('#tagStatsRows').innerHTML = tagStatsMarkup(tags);
+  document.querySelector('#tagStatsRows').innerHTML = tagStatsMarkup(tags, month);
   const needsReview = transactions.filter((item) => item.classification_status === 'needs_review');
   document.querySelector('#ruleRows').innerHTML = rules.map((rule) => `<div class="rule-row"><span>${escapeHtml(rule.pattern)}<br><span class="meta">${rule.rule_type} · 优先级 ${rule.priority}</span></span></div>`).join('') + `<div class="rule-row"><span>待整理队列<br><span class="meta">${needsReview.length} 笔待确认分类</span></span></div>`;
 }
@@ -844,15 +852,36 @@ function mobileCategoryBudgetMarkup(category, rows) {
   return `<section class="mobile-category-section">${budgetMarkup}${leafRows ? `<div class="unified-list">${leafRows}</div>` : ''}</section>`;
 }
 
-function tagStatsMarkup(rows, emptyDetail = '本月暂无已标记的支出。') {
+function tagStatsMarkup(rows, month, emptyDetail = '本月暂无已标记的支出。') {
   if (!rows.length) return renderState('list-state', '暂无标签消费', emptyDetail);
-  return rows.map((item) => `<button class="ledger-row tag-stat-row" type="button" data-tag-stat="${escapeHtml(item.id)}"><span><strong>${escapeHtml(item.label)}</strong><span class="tag-stat-meta">${escapeHtml(item.group_name)} · ${item.count} 笔 · 已标记消费占比 ${item.percentage.toFixed(0)}%</span></span><span class="amount">${formatMoney(item.value)}<small>查看明细</small></span></button>`).join('');
+  return rows.map((item) => `<button class="ledger-row tag-stat-row" type="button" data-tag-stat="${escapeHtml(item.id)}" data-stat-month="${escapeHtml(month)}"><span><strong>${escapeHtml(item.label)}</strong><span class="tag-stat-meta">${escapeHtml(item.group_name)} · ${item.count} 笔 · 已标记消费占比 ${item.percentage.toFixed(0)}%</span></span><span class="amount">${formatMoney(item.value)}<small>查看明细</small></span></button>`).join('');
 }
 
 export function monthLedgerFilters(month, tagId) {
   const [year, monthNumber] = month.split('-').map(Number);
   const end = String(new Date(year, monthNumber, 0).getDate()).padStart(2, '0');
-  return { start: `${month}-01`, end: `${month}-${end}`, tag_id: tagId, transaction_kind: 'expense' };
+  return { start: `${month}-01`, end: `${month}-${end}`, tag_id: tagId, transaction_kind: 'expense', stats_only: '1' };
+}
+
+export function ledgerFilterLabels(filters, accounts = [], taxonomy = {}) {
+  const labels = [];
+  if (filters.start || filters.end) labels.push(`${filters.start || '不限起始日期'} 至 ${filters.end || '不限结束日期'}`);
+  const categories = (taxonomy.categories || []).flatMap(root => [root, ...(root.children || [])]);
+  for (const [key, title, options] of [['account_id', '账户', accounts], ['category_id', '分类', categories], ['tag_id', '标签', taxonomy.tags || []]]) {
+    if (filters[key]) labels.push(`${title}：${options.find(item => item.id === filters[key])?.name || filters[key]}`);
+  }
+  const kinds = { expense: '支出', income: '收入', refund: '退款', transfer: '转账', credit_repayment: '信用卡还款', adjustment: '余额调整' };
+  if (filters.transaction_kind) labels.push(kinds[filters.transaction_kind] || filters.transaction_kind);
+  if (String(filters.stats_only) === '1') labels.push('仅计入统计的消费');
+  if (filters.query) labels.push(`搜索：${filters.query}`);
+  if (filters.min_amount !== undefined && filters.min_amount !== '') labels.push(`金额 ≥ ${filters.min_amount}`);
+  if (filters.max_amount !== undefined && filters.max_amount !== '') labels.push(`金额 ≤ ${filters.max_amount}`);
+  return labels;
+}
+
+function mobileLedgerFilterMarkup() {
+  const labels = ledgerFilterLabels(state.filters, state.accounts, state.taxonomy || {});
+  return labels.length ? `<section class="ledger-filter-summary" aria-label="当前筛选"><div><strong>当前筛选</strong><p>${labels.map(escapeHtml).join(' · ')}</p></div><button type="button" data-clear-ledger-filters>查看全部</button></section>` : '';
 }
 
 async function showTagLedger(tagId, month) {
@@ -878,7 +907,7 @@ async function renderMobile(tab, selectedMonth) {
     ).join('') || renderState('list-state', '尚未添加账户', '添加账户后即可开始记录收支。');
     target.innerHTML = accountHead + accountGroups;
   } else if (tab === 'ledger') {
-    target.innerHTML = '<div id="mobileLedgerRows" class="unified-list"></div>';
+    target.innerHTML = mobileLedgerFilterMarkup() + '<div id="mobileLedgerRows" class="unified-list"></div>';
     await pagerFor('mobile-ledger', '#mobileLedgerRows').reset(state.filters);
   } else if (tab === 'stats') {
     const requestToken = ++mobileStatsRequestToken;
@@ -904,7 +933,7 @@ async function renderMobile(tab, selectedMonth) {
     const groups = summary.categories.filter((category) => category.budget_amount !== null || category.spent_amount !== 0 || rowsByRoot.has(category.id));
     const groupMarkup = groups.map((category) => mobileCategoryBudgetMarkup(category, rowsByRoot.get(category.id) || [])).join('');
     const ungroupedMarkup = ungrouped.length ? `<div class="unified-list">${ungrouped.map((item) => `<div class="ledger-row category-stat-row"><span>${escapeHtml(item.label)}</span><span class="amount">${formatMoney(item.value)} · ${item.percentage.toFixed(0)}%</span></div>`).join('')}</div>` : '';
-    target.innerHTML = `<div class="page-head mobile-stats-head"><h2>统计</h2><input id="mobileStatsMonth" type="month" value="${month}"></div><p>收入 ${formatMoney(overview.income)} · 支出 ${formatMoney(overview.expense)}</p><div class="mobile-category-stats">${groupMarkup || '<p class="meta">暂无支出</p>'}${ungroupedMarkup}</div><section class="tag-stats-section"><div><h3>标签统计</h3><p>多标签交易会分别计入各标签。</p></div><div class="unified-list">${tagStatsMarkup(tags)}</div></section>`;
+    target.innerHTML = `<div class="page-head mobile-stats-head"><h2>统计</h2><input id="mobileStatsMonth" type="month" value="${month}"></div><p>收入 ${formatMoney(overview.income)} · 支出 ${formatMoney(overview.expense)}</p><div class="mobile-category-stats">${groupMarkup || '<p class="meta">暂无支出</p>'}${ungroupedMarkup}</div><section class="tag-stats-section"><div><h3>标签统计</h3><p>多标签交易会分别计入各标签。</p></div><div class="unified-list">${tagStatsMarkup(tags, month)}</div></section>`;
   } else {
     target.innerHTML = `<section class="mobile-settings"><h2>连接设置</h2><label>API 地址<input id="mobileApiUrl" value="${escapeHtml(baseUrl())}"></label><label>API Key<input id="mobileApiKey" type="password" value="${escapeHtml(apiKey())}"></label><button id="saveMobileSettings" class="primary">保存</button></section>`;
   }
@@ -1038,7 +1067,12 @@ function setup() {
     if (event.target.closest('[data-mobile-account-back]')) safe(() => renderMobile('home'));
     const tab = event.target.closest('[data-mobile-tab]')?.dataset.mobileTab; if (tab) safe(() => renderMobile(tab));
     const tagId = event.target.closest('[data-tag-stat]')?.dataset.tagStat;
-    if (tagId) safe(() => showTagLedger(tagId, window.matchMedia('(max-width: 899px)').matches ? state.mobileStatsMonth : state.taxonomyMonth));
+    if (tagId) safe(() => showTagLedger(tagId, event.target.closest('[data-tag-stat]').dataset.statMonth));
+    if (event.target.closest('[data-clear-ledger-filters]')) safe(async () => {
+      state.filters = {};
+      populateFilterOptions();
+      await renderMobile('ledger');
+    });
     if (event.target.id === 'refreshInsights') safe(async () => { state.periodMode = document.querySelector('#periodMode').value; state.periodAnchor = document.querySelector('#periodAnchor').value; await selectAccount(state.selectedAccountId, true); });
     if (event.target.id === 'saveSettings') { localStorage.setItem('apiUrl', document.querySelector('#apiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#apiKey').value); safe(load); }
     if (event.target.id === 'saveMobileSettings') { localStorage.setItem('apiUrl', document.querySelector('#mobileApiUrl').value.replace(/\/$/, '')); localStorage.setItem('apiKey', document.querySelector('#mobileApiKey').value); safe(load); }

@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260920-person-tags2"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-person-tags2"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260920-ledger-quality1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-ledger-quality1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -71,7 +71,7 @@ test('taxonomy page presents month-based tag spending statistics with a drill-do
   assert.match(html,/id="tagStatsRows"/);
   for (const token of ['stats/tags', 'data-tag-stat', '已标记消费占比', '多标签交易会分别计入各标签']) assert.ok(appSource.includes(token));
   assert.deepEqual(app.monthLedgerFilters('2026-02','travel'), {
-    start: '2026-02-01', end: '2026-02-28', tag_id: 'travel', transaction_kind: 'expense',
+    start: '2026-02-01', end: '2026-02-28', tag_id: 'travel', transaction_kind: 'expense', stats_only: '1',
   });
   assert.match(appSource,/renderMobile\('ledger'\)/);
 });
@@ -470,7 +470,7 @@ test('category budget details use the same monthly summary values and preserve a
 });
 test('desktop taxonomy and mobile stats consume the monthly budget summary without recalculating transactions',()=>{
   assert.match(html,/id="taxonomyMonth" type="month"/);
-  assert.match(appSource,/async function refreshTaxonomy\(month = today\(\)\.slice\(0, 7\)\)/);
+  assert.match(appSource,/async function refreshTaxonomy\(month = state.taxonomyMonth \|\| today\(\)\.slice\(0, 7\)\)/);
   assert.match(appSource,/api\(`\/budget-summary\?month=\$\{month\}`\)/);
   assert.match(appSource,/id="mobileStatsMonth"/);
   assert.match(appSource,/summary\.categories/);
@@ -731,4 +731,32 @@ test('opening a new transaction clears edited fields and reopening an edit resto
 
 test('hidden transaction delete action overrides the general button display rule', () => {
   assert.match(css, /#deleteTransaction\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+});
+
+test('ledger filter context covers date, person, stats scope and other active filters', () => {
+  assert.deepEqual(app.ledgerFilterLabels(app.monthLedgerFilters('2024-02', 'child'), [], {tags: [{id: 'child', name: '大宝'}]}), [
+    '2024-02-01 至 2024-02-29', '标签：大宝', '支出', '仅计入统计的消费',
+  ]);
+  assert.deepEqual(app.ledgerFilterLabels({}), []);
+  assert.deepEqual(app.ledgerFilterLabels({account_id: 'a', category_id: 'c', query: '午餐', min_amount: 0, max_amount: '100'}, [{id: 'a', name: '现金'}], {categories: [{id: 'root', children: [{id: 'c', name: '餐饮'}]}]}), ['账户：现金', '分类：餐饮', '搜索：午餐', '金额 ≥ 0', '金额 ≤ 100']);
+  assert.match(appSource, /labels.map\(escapeHtml\)/);
+  assert.match(appSource, /data-clear-ledger-filters[^]*?state.filters = \{\};[^]*?populateFilterOptions\(\);[^]*?await renderMobile\('ledger'\)/);
+});
+test('statistics refresh keeps the selected month and drill-down carries its rendered month', () => {
+  assert.match(appSource, /refreshTaxonomy\(month = state.taxonomyMonth \|\| today\(\).slice\(0, 7\)\)/);
+  assert.match(appSource, /data-stat-month="\$\{escapeHtml\(month\)\}"/);
+  assert.match(appSource, /showTagLedger\(tagId, event.target.closest\('\[data-tag-stat\]'\).dataset.statMonth\)/);
+});
+
+test('legacy default person tags keep their identifiers without hiding children or renaming custom tags', () => {
+  const legacy = [{id: 'family_member_a', name: '示例成员A'}, {id: 'family_member_b', name: '示例成员B'}];
+  assert.deepEqual(app.transactionTagOptions(legacy), [{id: 'family_member_a', name: '大宝'}, {id: 'family_member_b', name: '二宝'}]);
+  assert.equal(legacy[0].name, '示例成员A');
+  assert.deepEqual(app.transactionTagOptions([{id: 'family_member_a', name: '自定义成员'}]), []);
+  assert.deepEqual(app.transactionTagOptions([...legacy, {id: 'custom-child', name: '大宝'}]).map(tag => tag.id), ['custom-child', 'family_member_b']);
+});
+test('desktop filters expose and retain the statistics consumption scope', () => {
+  assert.match(html, /name="stats_only"[^]*?<option value="1">仅计入统计的消费/);
+  assert.match(appSource, /if \(state.filters.stats_only === '1'\) form.querySelector\('\.filter-more'\).open = true/);
+  assert.match(app.buildExportPath(app.monthLedgerFilters('2026-09', 'self'), 1), /stats_only=1/);
 });

@@ -658,6 +658,30 @@ class WalletAnalyticsApiTest(unittest.TestCase):
             {"id": "family_member_a", "label": "大宝", "group_name": "家庭成员", "value": 120.0, "count": 1, "percentage": 44.44444444444444},
         ])
 
+    def test_tag_drilldown_matches_stats_and_export(self):
+        included = self.add_transaction(amount=-42)
+        self.add_transaction(amount=-80, excluded_from_stats=True)
+        self.add_transaction(amount=20, transaction_kind="refund")
+        self.add_transaction(amount=-10, timestamp="2026-08-01T00:00:00+00:00")
+        # Legacy data can contain an expense with a positive amount.
+        legacy = self.add_transaction(amount=-7)
+        with closing(connect_database(self.app.config["DB_PATH"])) as conn:
+            conn.execute("UPDATE transactions SET amount=7 WHERE id=?", (legacy["id"],))
+            conn.commit()
+        stats = self.request("GET", "/stats/tags?year=2026&month=7").json
+        query = "start=2026-07-01&end=2026-07-31&tag_id=family_member_a&stats_only=1"
+        page = self.request("GET", "/transactions?paginated=1&limit=1&" + query).json
+        self.assertEqual(page["pagination"]["total"], stats[0]["count"])
+        self.assertEqual(page["pagination"]["total"], 1)
+        self.assertEqual(page["transactions"][0]["id"], included["id"])
+        self.assertEqual(-sum(row["amount"] for row in page["transactions"]), stats[0]["value"])
+        exported = self.request("GET", "/export.csv?" + query)
+        rows = list(csv.reader(io.StringIO(exported.data.decode("utf-8-sig"))))
+        self.assertEqual([row[0] for row in rows[1:]], [included["id"]])
+        self.assertEqual(self.request("GET", "/transactions?stats_only=invalid").status_code, 400)
+        ordinary = self.request("GET", "/transactions?start=2026-07-01&end=2026-07-31").json
+        self.assertEqual(len(ordinary), 4)
+
     def test_overview_treats_credit_card_overpayment_as_an_asset(self):
         response = self.request("POST", "/accounts", {
             "name": "溢缴信用卡", "type": "credit", "initial_balance": 100,

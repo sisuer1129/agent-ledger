@@ -248,7 +248,18 @@ def initialize_database_path(db_path):
                     (str(SCHEMA_VERSION),),
                 )
                 _after_schema_version_update(conn)
-            seed_taxonomy(conn)
+            # Taxonomy is editable data, not a schema migration. Schema v3+
+            # already initialized it in previous releases; adopt those values
+            # without restoring deleted defaults or overwriting preferences.
+            taxonomy_initialized = conn.execute(
+                "SELECT value FROM schema_meta WHERE key = 'taxonomy_initialized'"
+            ).fetchone()
+            if taxonomy_initialized is None:
+                if current_version < 3:
+                    seed_taxonomy(conn)
+                conn.execute(
+                    "INSERT INTO schema_meta (key, value) VALUES ('taxonomy_initialized', '1')"
+                )
             conn.commit()
         except Exception:
             conn.rollback()

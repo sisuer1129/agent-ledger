@@ -237,3 +237,9 @@ dialog label { display: grid; gap: 6px; color: var(--text-2); }
 .filter-amount-hint { grid-column: 1 / -1; margin: 0; color: var(--text-3); font-size: 12px; }
 
 #deleteTransaction[hidden] { display: none !important; }
+
+.ledger-filter-summary { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--hairline); border-radius: var(--r-panel); background: var(--surface); }
+.ledger-filter-summary > div { flex: 1; min-width: 0; }
+.ledger-filter-summary strong { font-size: 13px; }
+.ledger-filter-summary p { margin: 4px 0 0; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.ledger-filter-summary button { flex-shrink: 0; color: var(--accent); }

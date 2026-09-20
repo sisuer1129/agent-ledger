@@ -72,6 +72,44 @@ class SeedCatalogTest(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_repeated_app_boot_preserves_existing_user_configuration(self):
+        import tempfile
+        from main import create_app
+
+        for existing_release in (False, True):
+            with self.subTest(existing_release=existing_release), tempfile.TemporaryDirectory() as directory:
+                db_path = Path(directory) / "wallet.db"
+                initialize_database_path(db_path)
+                conn = connect_database(db_path)
+                try:
+                    # Include a historical name collision and inactive defaults.
+                    conn.execute("UPDATE tags SET name='示例成员A', is_active=0 WHERE id='family_member_a'")
+                    conn.execute("UPDATE tags SET name='大宝', group_name='自定义', keywords='保留', is_active=0 WHERE id='child'")
+                    conn.execute("UPDATE categories SET name='我家的餐饮', sort_order=77, is_active=0 WHERE id='expense_dining'")
+                    conn.execute("UPDATE categories SET parent_id='expense_daily_shopping', name='自定义餐费', sort_order=88 WHERE id='expense_dining_meal'")
+                    conn.execute("UPDATE classification_rules SET pattern='用户规则', priority=7, is_active=0 WHERE id='tag-subscription'")
+                    conn.execute("DELETE FROM classification_rules WHERE id='category-ai-subscription'")
+                    conn.execute("DELETE FROM tags WHERE id='trip_example'")
+                    conn.execute("INSERT INTO accounts (id, name, type, statement_day, due_day, due_month_offset, budget_period) VALUES ('card', '示例信用卡A', 'credit', NULL, NULL, 0, 'calendar_month')")
+                    if existing_release:
+                        conn.execute("DELETE FROM schema_meta WHERE key='taxonomy_initialized'")
+                    conn.commit()
+                    tables = ('categories', 'tags', 'classification_rules', 'accounts', 'transaction_tags')
+                    before = {table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")] for table in tables}
+                finally:
+                    conn.close()
+
+                for _ in range(2):
+                    app = create_app({'TESTING': True, 'DB_PATH': str(db_path), 'API_KEY': 'test-key'})
+                    self.assertEqual(app.test_client().get('/health').status_code, 200)
+                    conn = connect_database(db_path)
+                    try:
+                        after = {table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1")] for table in tables}
+                        self.assertEqual(after, before)
+                        self.assertEqual(conn.execute("SELECT value FROM schema_meta WHERE key='taxonomy_initialized'").fetchone()[0], '1')
+                    finally:
+                        conn.close()
+
     def test_automatic_classification_returns_seed_category_ids(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:

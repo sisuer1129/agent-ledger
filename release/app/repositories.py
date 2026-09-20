@@ -403,6 +403,8 @@ def _transaction_where(filters):
             value = _finite_number(value, key)
         clauses.append(column + " " + operator + " ?")
         params.append(value)
+    if filters.get("stats_only") == "1":
+        clauses.extend(("t.excluded_from_stats = 0", "t.transaction_kind = 'expense'", "t.amount < 0"))
     if filters.get("tag_id") is not None:
         clauses.append(
             "EXISTS (SELECT 1 FROM transaction_tags filter_tt "
