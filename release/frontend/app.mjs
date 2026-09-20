@@ -78,12 +78,14 @@ export const transactionAccountOptions = (accounts, transaction = {}) => {
   if (!transaction.id || !transaction.account_id || accounts.some(account => account.id === transaction.account_id)) return accounts;
   return [...accounts, { id: transaction.account_id, name: `${transaction.account_name || '原账户'}（已停用）` }];
 };
-const PERSON_TAG_IDS = ['self', 'spouse', 'family_member_a', 'family_member_b', 'family'];
+const PERSON_TAG_NAMES = ['本人', '配偶', '大宝', '二宝', '家庭公共'];
 export const transactionTagOptions = (tags, transaction = {}) => {
   const byId = new Map(tags.map((tag) => [tag.id, tag]));
-  const personTags = PERSON_TAG_IDS.map((tagId) => byId.get(tagId)).filter(Boolean);
+  const byName = new Map(tags.map((tag) => [tag.name, tag]));
+  const personTags = PERSON_TAG_NAMES.map((name) => byName.get(name)).filter(Boolean);
+  const personTagIds = new Set(personTags.map((tag) => tag.id));
   const selectedLegacyTags = (transaction.tag_ids || [])
-    .filter((tagId) => !PERSON_TAG_IDS.includes(tagId))
+    .filter((tagId) => !personTagIds.has(tagId))
     .map((tagId) => byId.get(tagId))
     .filter(Boolean);
   return [...personTags, ...selectedLegacyTags];

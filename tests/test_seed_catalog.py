@@ -10,6 +10,7 @@ sys.path.insert(0, str(APP_DIR))
 from seed_catalog import load_category_color_seed, load_category_seed, load_tag_seed
 from db import connect_database, initialize_database_path
 from classifier import classify_transaction
+from taxonomy import seed_taxonomy
 
 
 class SeedCatalogTest(unittest.TestCase):
@@ -49,6 +50,25 @@ class SeedCatalogTest(unittest.TestCase):
                 self.assertEqual(tuple(category), ("income_salary_bonus", "工资薪酬"))
                 tag = conn.execute("SELECT name FROM tags WHERE id = 'trip_example'").fetchone()
                 self.assertEqual(tag["name"], "示例旅行项目")
+            finally:
+                conn.close()
+
+    def test_existing_custom_person_name_does_not_block_taxonomy_seed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "wallet.db"
+            initialize_database_path(db_path)
+            conn = connect_database(db_path)
+            try:
+                conn.execute("UPDATE tags SET name = '示例成员A' WHERE id = 'family_member_a'")
+                conn.execute("UPDATE tags SET name = '大宝' WHERE id = 'child'")
+                conn.commit()
+
+                seed_taxonomy(conn)
+                conn.commit()
+
+                self.assertEqual(conn.execute("SELECT name FROM tags WHERE id = 'child'").fetchone()["name"], "大宝")
+                self.assertEqual(conn.execute("SELECT name FROM tags WHERE id = 'family_member_a'").fetchone()["name"], "示例成员A")
             finally:
                 conn.close()
 

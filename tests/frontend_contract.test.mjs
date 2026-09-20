@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260920-person-tags1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-person-tags1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260920-person-tags2"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-person-tags2"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });

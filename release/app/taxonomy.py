@@ -66,7 +66,37 @@ def _insert_category(conn, category_id, name, category_type, parent_id, sort_ord
 
 
 def _seed_tags(conn):
-    for tag in load_tag_seed()["tags"]:
+    tags = load_tag_seed()["tags"]
+    person_tag_ids = {
+        tag["name"]: tag["id"]
+        for tag in tags
+        if tag["name"] in {"本人", "配偶", "大宝", "二宝", "家庭公共"}
+    }
+    protected_ids = {
+        row["id"]
+        for name, expected_id in person_tag_ids.items()
+        for row in conn.execute("SELECT id FROM tags WHERE name = ?", (name,))
+        if row["id"] != expected_id
+    }
+    for tag in tags:
+        if tag["id"] in protected_ids:
+            conn.execute(
+                "UPDATE tags SET group_name = ?, is_active = 1 WHERE id = ?",
+                (tag["group"], tag["id"]),
+            )
+            continue
+        name_owner = conn.execute(
+            "SELECT id FROM tags WHERE name = ? AND id <> ?", (tag["name"], tag["id"])
+        ).fetchone()
+        if name_owner is not None:
+            # A user may have already given another historical tag this display
+            # name. Keep both stable IDs intact and let the UI use that person's
+            # existing tag rather than aborting application startup.
+            conn.execute(
+                "UPDATE tags SET group_name = ?, is_active = 1 WHERE id = ?",
+                (tag["group"], tag["id"]),
+            )
+            continue
         conn.execute(
             "INSERT INTO tags (id, name, group_name, keywords, is_active) "
             "VALUES (?, ?, ?, '', 1) "
