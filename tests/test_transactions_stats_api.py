@@ -655,7 +655,7 @@ class WalletAnalyticsApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), [
             {"id": "travel", "label": "旅行", "group_name": "旅行项目", "value": 150.0, "count": 2, "percentage": 55.55555555555556},
-            {"id": "family_member_a", "label": "示例成员A", "group_name": "家庭成员", "value": 120.0, "count": 1, "percentage": 44.44444444444444},
+            {"id": "family_member_a", "label": "大宝", "group_name": "家庭成员", "value": 120.0, "count": 1, "percentage": 44.44444444444444},
         ])
 
     def test_overview_treats_credit_card_overpayment_as_an_asset(self):

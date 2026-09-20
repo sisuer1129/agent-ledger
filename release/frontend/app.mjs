@@ -78,6 +78,16 @@ export const transactionAccountOptions = (accounts, transaction = {}) => {
   if (!transaction.id || !transaction.account_id || accounts.some(account => account.id === transaction.account_id)) return accounts;
   return [...accounts, { id: transaction.account_id, name: `${transaction.account_name || '原账户'}（已停用）` }];
 };
+const PERSON_TAG_IDS = ['self', 'spouse', 'family_member_a', 'family_member_b', 'family'];
+export const transactionTagOptions = (tags, transaction = {}) => {
+  const byId = new Map(tags.map((tag) => [tag.id, tag]));
+  const personTags = PERSON_TAG_IDS.map((tagId) => byId.get(tagId)).filter(Boolean);
+  const selectedLegacyTags = (transaction.tag_ids || [])
+    .filter((tagId) => !PERSON_TAG_IDS.includes(tagId))
+    .map((tagId) => byId.get(tagId))
+    .filter(Boolean);
+  return [...personTags, ...selectedLegacyTags];
+};
 
 export const createSubmissionGuard = (onPending = () => {}) => {
   const pendingKeys = new WeakSet();
@@ -466,7 +476,7 @@ function populateTransactionForm(transaction = {}) {
     .filter((account) => account.type === 'credit')
     .map((account) => `<option value="${account.id}">${escapeHtml(account.name)}</option>`).join('');
   form.querySelector('[name=category_id]').innerHTML = '<option value="">自动建议</option>' + categoryOptions().map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join('');
-  form.querySelector('[name=tag_ids]').innerHTML = (state.taxonomy?.tags || []).map((tag) => `<option value="${tag.id}">${escapeHtml(tag.name)}</option>`).join('');
+  form.querySelector('[name=tag_ids]').innerHTML = transactionTagOptions(state.taxonomy?.tags || [], transaction).map((tag) => `<option value="${tag.id}">${escapeHtml(tag.name)}</option>`).join('');
   form.querySelector('[name=timestamp]').value = transaction.timestamp?.slice(0, 10) || today();
   for (const name of ['account_id', 'category_id', 'transaction_kind', 'description']) if (transaction[name]) form.querySelector(`[name=${name}]`).value = transaction[name];
   form.querySelector('[name=amount]').value = transaction.amount === undefined ? '' : Math.abs(transaction.amount);

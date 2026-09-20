@@ -10,7 +10,7 @@ test('responsive wallet shell contract',()=>{
   for(const id of ['desktopWorkspace','mobileApp','mobileContent','accountList','accountDetail','budgetPage','taxonomyPage','accountDialog','transactionDialog','budgetDialog','ruleDialog']) assert.match(html,new RegExp(`id="${id}"`));
   for(const token of ['data-mobile-tab="home"','data-mobile-tab="ledger"','data-mobile-tab="stats"','data-mobile-tab="settings"','data-rule-target="category"','data-rule-target="tag"','data-rule-target="kind"']) assert.ok(html.includes(token));
   for(const token of ['data-edit-account','data-edit-transaction','periodMode','periodAnchor']) assert.ok(appSource.includes(token));
-  assert.match(html,/href="\/styles\.css\?v=20260920-tagstats1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-tagstats1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
+  assert.match(html,/href="\/styles\.css\?v=20260920-person-tags1"/); assert.match(html,/type="module" src="\/app\.mjs\?v=20260920-person-tags1"/); assert.match(html,/<svg viewBox="0 0 24 24">/); assert.doesNotMatch(html,/＞?＋|＞?×/);
   for(const term of ['@media (min-width: 900px)','@media (max-width: 680px)','prefers-reduced-motion: reduce','prefers-reduced-transparency: reduce','prefers-contrast: more','saturate(180%)','width: min(440px, calc(100vw - 32px))','height: 320px','height: 240px !important','.mobile-settings']) assert.ok(css.includes(term));
   assert.doesNotMatch(css,/#f5f4ed|Georgia|Inter|Roboto/);
 });
@@ -74,6 +74,18 @@ test('taxonomy page presents month-based tag spending statistics with a drill-do
     start: '2026-02-01', end: '2026-02-28', tag_id: 'travel', transaction_kind: 'expense',
   });
   assert.match(appSource,/renderMobile\('ledger'\)/);
+});
+test('new transactions offer only the five person tags while old tags remain editable',()=>{
+  const tags = [
+    {id:'subscription',name:'订阅'}, {id:'family',name:'家庭公共'}, {id:'family_member_b',name:'二宝'},
+    {id:'self',name:'本人'}, {id:'travel',name:'旅行'}, {id:'spouse',name:'配偶'}, {id:'family_member_a',name:'大宝'},
+  ];
+  assert.deepEqual(app.transactionTagOptions(tags).map((tag) => tag.id), [
+    'self', 'spouse', 'family_member_a', 'family_member_b', 'family',
+  ]);
+  assert.deepEqual(app.transactionTagOptions(tags, {id:'old',tag_ids:['travel']}).map((tag) => tag.id), [
+    'self', 'spouse', 'family_member_a', 'family_member_b', 'family', 'travel',
+  ]);
 });
 test('frontend state covers mobile, dialogs, retries and chart fallbacks',()=>{
   for(const token of ['async function renderMobile','refreshBudgetTargets','refreshRuleTargets','function safe','showStatus','refreshAfterSave','editTransaction','deactivateAccount','renderCharts(detail, categoryPresentationMap())','mobile-settings','预算 ${formatMoney(account.monthly_budget)}']) assert.ok(appSource.includes(token));
@@ -698,8 +710,8 @@ test('opening a new transaction clears edited fields and reopening an edit resto
     reset() { for (const node of nodes.values()) { node.value = ''; node.checked = false; } },
   };
   const body = appSource.slice(appSource.indexOf('function populateTransactionForm('), appSource.indexOf('\nfunction syncRepaymentAccountChoices('));
-  const populate = new Function('document', 'transactionIdempotencyKeys', 'state', 'transactionAccountOptions', 'escapeHtml', 'categoryOptions', 'today', 'transactionEditMode', 'setTransactionFormMode', 'renderCategoryPicker', `${body}; return populateTransactionForm;`)(
-    { querySelector: () => form }, { reset() {} }, { accounts: [], taxonomy: { tags: [] } }, app.transactionAccountOptions,
+  const populate = new Function('document', 'transactionIdempotencyKeys', 'state', 'transactionAccountOptions', 'transactionTagOptions', 'escapeHtml', 'categoryOptions', 'today', 'transactionEditMode', 'setTransactionFormMode', 'renderCategoryPicker', `${body}; return populateTransactionForm;`)(
+    { querySelector: () => form }, { reset() {} }, { accounts: [], taxonomy: { tags: [] } }, app.transactionAccountOptions, app.transactionTagOptions,
     value => value, () => [], () => '2026-09-19', app.transactionEditMode, () => {}, () => {},
   );
   const old = { id: 'old', account_id: 'a', description: '原交易备注', amount: -23.5, transaction_kind: 'expense', timestamp: '2026-09-18T12:00:00Z' };

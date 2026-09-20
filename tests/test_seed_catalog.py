@@ -32,7 +32,7 @@ class SeedCatalogTest(unittest.TestCase):
     def test_tag_seed_preserves_personal_tags_and_adds_confirmed_groups(self):
         seed = load_tag_seed()
         names = {tag["name"] for tag in seed["tags"]}
-        self.assertTrue({"示例成员A", "示例成员B", "本人", "示例旅行项目", "必要消费", "车辆"} <= names)
+        self.assertTrue({"大宝", "二宝", "本人", "配偶", "家庭公共", "示例旅行项目", "必要消费", "车辆"} <= names)
 
     def test_new_database_initializes_categories_and_tags_from_seed(self):
         import tempfile

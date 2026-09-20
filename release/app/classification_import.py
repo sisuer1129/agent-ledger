@@ -18,6 +18,7 @@ ID_FIELD = "交易 ID"
 REQUIRED_FIELDS = (ID_FIELD, "时间", "账户", "金额", "一级分类", "二级分类", "标签", "交易性质", "是否计入统计", "备注")
 LEGACY_REQUIRED_FIELDS = REQUIRED_FIELDS[1:]
 REVIEW_OVERRIDE_FIELDS = ("类型", "一级分类", "二级分类", "标签", "交易性质", "是否计入统计", "备注")
+TAG_NAME_ALIASES = {"示例成员A": "大宝", "示例成员B": "二宝"}
 
 
 class ClassificationImportError(RuntimeError):
@@ -227,10 +228,15 @@ def _resolve_tags(conn, raw):
         raise ClassificationImportError("CSV contains duplicate tags for one transaction")
     tag_ids = []
     for name in names:
-        tag = conn.execute("SELECT id FROM tags WHERE name = ? AND is_active = 1", (name,)).fetchone()
+        tag = conn.execute(
+            "SELECT id FROM tags WHERE name = ? AND is_active = 1",
+            (TAG_NAME_ALIASES.get(name, name),),
+        ).fetchone()
         if tag is None:
             raise ClassificationImportError("unknown or inactive tag: " + name)
         tag_ids.append(tag["id"])
+    if len(tag_ids) != len(set(tag_ids)):
+        raise ClassificationImportError("CSV contains duplicate tags for one transaction")
     return sorted(tag_ids)
 
 

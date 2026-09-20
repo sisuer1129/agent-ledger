@@ -91,7 +91,7 @@ class TaxonomySeedTest(unittest.TestCase):
             self.assertEqual(tags, [(tag["id"], tag["name"], tag["group"]) for tag in load_tag_seed()["tags"]])
             self.assertEqual(
                 conn.execute("SELECT name FROM tags WHERE id = 'family_member_a'").fetchone()[0],
-                "示例成员A",
+                "大宝",
             )
 
             active_rules = [
